@@ -147,9 +147,12 @@
   // Every art pixel is: done (right colour already), blocked (someone else's colour, skipped while
   // "protect" is on) or still to paint. `order` picks among the ones still to paint.
   // Team: with N friends, pixel (x, y) of the art belongs to member (x + y) % N. Everyone paints their own
-  // share first, then helps with the others' shares from the opposite end, so two people rarely pick the same pixel.
+  // share first. After that they help with whatever is left: the leftovers are put in one list and every
+  // member starts at a different place in it (member 1 at the end, the others spread out before it), so
+  // helpers don't pick the same pixel as each other or as the owner, who works from the start.
   function pickNext(art, origin, protect, placed, order, team) {
     let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0;
+    const rest = [];   // pixels of other members' shares that are still to paint
     const size = team && team.size > 1 ? team.size : 1, slot = size > 1 ? Math.min(size, Math.max(1, team.slot || 1)) - 1 : 0;
     const cx = (art.w - 1) / 2, cy = (art.h - 1) / 2;
     for (let y = 0; y < art.h; y++) for (let x = 0; x < art.w; x++) {
@@ -167,9 +170,13 @@
       else if (order === 'center') score = (x - cx) ** 2 + (y - cy) ** 2;
       else if (order === 'outline') score = (c === 27 ? 0 : 1e6) + y * art.w + x;   // black lines first
       else score = y * art.w + x;                                                   // top to bottom
-      const far = ((x + y) % size - slot + size) % size;   // 0 = my share
-      if (far) score = 1e9 * far - score; else mine++;
+      if ((x + y) % size !== slot) { rest.push({ score, p: { x: bx, y: by, c, i } }); continue; }
+      mine++;
       if (score < best) { best = score; next = { x: bx, y: by, c, i }; }
+    }
+    if (!next && rest.length) {
+      rest.sort((a, b) => a.score - b.score);
+      next = rest[rest.length - 1 - Math.floor(slot * rest.length / size)].p;
     }
     return { next, total, done, blocked, todo: n, mine, size };
   }
