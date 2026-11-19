@@ -32,7 +32,7 @@ For friends who want to paint one art together, each with their own account and 
 2. Everyone else pastes that code and clicks **Load code**. This gives them the same art, spot and team size.
 3. Each friend picks a different **I am number**, then clicks Start.
 
-The art is split evenly between the numbers. Each bot paints its own share first, then helps with what is left, so the art still finishes if someone is offline.
+The art is split into shares with the same number of pixels. Each bot paints only its own share while the others are painting theirs, so everyone paints the same amount. If a friend stops for 20 seconds (offline or stuck), the bots that are finished step in and split that share between them, so the art still gets done. Everyone must use the same version of the extension and the same paint order (the team code sets it; "Random" counts as "Top to bottom" in a team).
 
 ## Protected arts (anti-griefing)
 When the bot sees your art complete, it saves the picture and its spot in a list (shown in the popup under **Protected arts**). From then on it keeps checking those spots every few seconds while the canvas is open, and repaints any pixel that someone painted over, before it continues with new art. You can remove an art from the list, or turn the feature off with the checkbox in **Run**.

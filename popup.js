@@ -118,7 +118,8 @@ async function checkProgress(quiet) {
   let share = '';
   if (team && team.size > 1) {
     let left = 0;
-    states.forEach((st, k) => { if (st === 'todo' && ((k % art.w) + Math.floor(k / art.w)) % team.size === team.slot - 1) left++; });
+    let rank = -1;   // same dealing as the painter: the n-th pixel of the art goes to member n % friends
+    states.forEach((st, k) => { if (art.data[k] < 0) return; rank++; if (st === 'todo' && rank % team.size === team.slot - 1) left++; });
     share = `<br>👥 Your share (number ${team.slot} of ${team.size}): <b>${left}</b> left`;
   }
   const total = done + todo + blocked, pct = total ? Math.round(done / total * 100) : 0;
@@ -193,9 +194,10 @@ async function saveTeam() {
   drawTeam({ size, slot }); checkSoon();
 }
 $('teamSize').onchange = saveTeam; $('teamSlot').onchange = saveTeam;
+const ORDERS = ['rows', 'outline', 'center', 'random'];
 function teamEncode(a, o, size) {
   const b = new Uint8Array(9 + a.data.length);
-  b.set([a.w >> 8, a.w & 255, a.h >> 8, a.h & 255, o.x >> 8, o.x & 255, o.y >> 8, o.y & 255, size]);
+  b.set([a.w >> 8, a.w & 255, a.h >> 8, a.h & 255, o.x >> 8, o.x & 255, o.y >> 8, o.y & 255, size + 16 * Math.max(0, ORDERS.indexOf($('order').value))]);   // friends + paint order
   a.data.forEach((c, k) => { b[9 + k] = c + 1; });
   let s = ''; b.forEach((v) => { s += String.fromCharCode(v); });
   return 'CAB1.' + btoa(s);
@@ -207,8 +209,8 @@ function teamDecode(code) {
   const b = Uint8Array.from(s, (ch) => ch.charCodeAt(0));
   const w = b[0] << 8 | b[1], h = b[2] << 8 | b[3];
   if (!w || !h || w > 500 || h > 500 || b.length !== 9 + w * h) throw new Error('a damaged team code');
-  const size = Math.min(8, Math.max(1, b[8]));
-  return { art: { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin: { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] }, size };
+  const size = Math.min(8, Math.max(1, b[8] & 15));
+  return { order: ORDERS[b[8] >> 4] || 'rows', art: { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin: { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] }, size };
 }
 $('teamCopy').onclick = async () => {
   if (!art) return ($('teamInfo').textContent = 'Pick or upload an art first.');
@@ -224,7 +226,8 @@ $('teamLoad').onclick = async () => {
   $('ox').value = t.origin.x; $('oy').value = t.origin.y;
   const slot = Math.min(t.size, +$('teamSlot').value || 1);
   art = t.art;
-  await chrome.storage.local.set({ art, origin: t.origin, placed: [], presetId: '', team: { size: t.size, slot } });
+  $('order').value = t.order;
+  await chrome.storage.local.set({ art, origin: t.origin, placed: [], presetId: '', team: { size: t.size, slot }, order: t.order });
   drawTeam({ size: t.size, slot }); drawPreview(); checkSoon();
   $('teamInfo').innerHTML = `<span class="good">Loaded ✓</span> ${t.art.w}×${t.art.h} at (${t.origin.x}, ${t.origin.y}), ${t.size} friends. Now pick your number: each friend a different one.`;
 };
