@@ -285,6 +285,15 @@ $('toggle').onclick = async () => {
   paintToggle(!enabled);
 };
 
+// the painter has gone silent (tab asleep, error page, lost connection): refresh its tab, or open one
+async function reviveTab() {
+  const { enabled, reloadAt = 0 } = await chrome.storage.local.get(['enabled', 'reloadAt']);
+  if (!enabled || Date.now() - reloadAt < 60000) return;
+  await chrome.storage.local.set({ reloadAt: Date.now() });
+  const tabs = await chrome.tabs.query({ url: BASE + '/*' });
+  if (tabs.length) tabs.forEach((t) => chrome.tabs.reload(t.id));
+  else chrome.tabs.create({ url: BASE + '/canvas', active: false });
+}
 function showStatus(s) {
   if (!s) return ($('status').textContent = 'Open odedsvrmonopoly.app in a tab, the bot runs there.');
   const age = Math.round((Date.now() - s.t) / 1000);
@@ -293,9 +302,10 @@ function showStatus(s) {
   const team = (s.team ? `<br>👥 ${s.team}` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '') + (s.who ? `<br>🔎 ${s.who}` : '');
   const extra = team + (s.state === 'painting' && s.eta ? `<br>Time left: ${s.eta}` : '') + (s.session ? `<br><span class="muted">${s.session} painted since this tab opened</span>` : '');
   $('status').className = s.state || '';
+  if (age > 30) reviveTab();
   // keep the preview in step with the bot while it paints
   if (s.state === 'painting' && art && Date.now() - lastCheck > 5000) checkProgress(true);
-  $('status').innerHTML = `${s.msg}${pool}${prog}${extra}<br><span class="muted">${age > 30 ? `last update ${age}s ago, is a site tab open?` : ''}</span>`;
+  $('status').innerHTML = `${s.msg}${pool}${prog}${extra}<br><span class="muted">${age > 30 ? `last update ${age}s ago. If the bot is on, the site tab is refreshed by itself.` : ''}</span>`;
 }
 chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); });
 

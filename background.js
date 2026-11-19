@@ -46,8 +46,8 @@ async function poll() {
     }
   }
   // The painter reports every few seconds. If the site answers (we just got its status) but the painter has
-  // been silent for 90 s, its tab lost the connection, shows an error page, or was put to sleep: refresh it.
-  if (open && wasOpen && enabled && art && (!status || Date.now() - status.t > 90000) && Date.now() - reloadAt > 120000) {
+  // been silent for 45 s, its tab lost the connection, shows an error page, or was put to sleep: refresh it.
+  if (enabled && art && (!status || Date.now() - status.t > 45000) && Date.now() - reloadAt > (open ? 60000 : 300000)) {
     const tabs = await chrome.tabs.query({ url: BASE + '/*' });
     if (tabs.length) {
       await chrome.storage.local.set({ reloadAt: Date.now() });
