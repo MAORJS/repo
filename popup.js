@@ -200,17 +200,23 @@ function teamEncode(a, o, size) {
   b.set([a.w >> 8, a.w & 255, a.h >> 8, a.h & 255, o.x >> 8, o.x & 255, o.y >> 8, o.y & 255, size + 16 * Math.max(0, ORDERS.indexOf($('order').value))]);   // friends + paint order
   a.data.forEach((c, k) => { b[9 + k] = c + 1; });
   let s = ''; b.forEach((v) => { s += String.fromCharCode(v); });
-  return 'CAB1.' + btoa(s);
+  // third part: the approved painters (with your own name), so the whole team has the same list
+  const names = [...new Set([...$('approved').value.split(/[,\s]+/), myKick].map((n) => String(n || '').trim().toLowerCase()).filter(Boolean))];
+  return 'CAB1.' + btoa(s) + '.' + btoa(unescape(encodeURIComponent(names.join(','))));
 }
 function teamDecode(code) {
   code = String(code).trim();
   if (!code.startsWith('CAB1.')) throw new Error('not a team code');
+  let names = [];
+  const parts = code.split('.');
+  if (parts[2]) { try { names = decodeURIComponent(escape(atob(parts[2]))).split(',').filter(Boolean); } catch { /* no names */ } }
+  code = parts[0] + '.' + parts[1];
   let s; try { s = atob(code.slice(5)); } catch { throw new Error('a damaged team code'); }
   const b = Uint8Array.from(s, (ch) => ch.charCodeAt(0));
   const w = b[0] << 8 | b[1], h = b[2] << 8 | b[3];
   if (!w || !h || w > 500 || h > 500 || b.length !== 9 + w * h) throw new Error('a damaged team code');
   const size = Math.min(8, Math.max(1, b[8] & 15));
-  return { order: ORDERS[b[8] >> 4] || 'rows', art: { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin: { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] }, size };
+  return { names, order: ORDERS[b[8] >> 4] || 'rows', art: { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin: { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] }, size };
 }
 $('teamCopy').onclick = async () => {
   if (!art) return ($('teamInfo').textContent = 'Pick or upload an art first.');
@@ -227,6 +233,10 @@ $('teamLoad').onclick = async () => {
   const slot = Math.min(t.size, +$('teamSlot').value || 1);
   art = t.art;
   $('order').value = t.order;
+  if (t.names.length) {   // add the team's names to your list
+    $('approved').value = [...new Set([...$('approved').value.split(/[,\s]+/).map((n) => n.trim().toLowerCase()).filter(Boolean), ...t.names])].join(', ');
+    await saveApproved();
+  }
   await chrome.storage.local.set({ art, origin: t.origin, placed: [], presetId: '', team: { size: t.size, slot }, order: t.order });
   drawTeam({ size: t.size, slot }); drawPreview(); checkSoon();
   $('teamInfo').innerHTML = `<span class="good">Loaded ✓</span> ${t.art.w}×${t.art.h} at (${t.origin.x}, ${t.origin.y}), ${t.size} friends. Now pick your number: each friend a different one.`;
@@ -246,6 +256,8 @@ async function drawGuard() {
   }; });
 }
 const DEFAULT_APPROVED = ['kgsx', 'ksgxl', 'kgsxs'];
+let myKick = '';   // your name on the site, as the painter last saw it
+function drawMe(n) { myKick = n || ''; $('meName').textContent = myKick ? `You are painting as: ${myKick}. Teammates need this exact name on their list.` : ''; }
 const saveApproved = () => chrome.storage.local.set({
   approvedOn: $('approvedOn').checked,
   approved: $('approved').value.split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean),
@@ -310,10 +322,11 @@ function showStatus(s) {
   if (s.state === 'painting' && art && Date.now() - lastCheck > 5000) checkProgress(true);
   $('status').innerHTML = `${s.msg}${pool}${prog}${extra}<br><span class="muted">${age > 30 ? `last update ${age}s ago. If the bot is on, the site tab is refreshed by itself.` : ''}</span>`;
 }
-chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); });
+chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); if (ch.me) drawMe(ch.me.newValue); });
 
 (async () => {
-  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn']);
+  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'me']);
+  drawMe(s.me);
   $('approvedOn').checked = s.approvedOn !== false;
   $('approved').value = (Array.isArray(s.approved) ? s.approved : DEFAULT_APPROVED).join(', ');
   $('autoGuard').checked = s.autoGuard !== false;

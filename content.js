@@ -119,6 +119,7 @@
       else n = localStorage.getItem('mono-name') || '';
     } catch { try { n = localStorage.getItem('mono-name') || ''; } catch { /* storage blocked */ } }
     if (n !== myName) pool.charges = null;   // another account: ask for its pool
+    if (n && n !== myName) { try { chrome.storage.local.set({ me: n }); } catch { /* reloaded */ } }   // the popup shows it
     myName = n; nameAt = Date.now();
     return n;
   }
@@ -183,7 +184,8 @@
   // member starts at a different place in it (member 1 at the end, the others spread out before it), so
   // helpers don't pick the same pixel as each other or as the owner, who works from the start.
   function pickNext(art, origin, protect, placed, order, team, guard, ts) {
-    let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0, retake = 0;
+    let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0, retake = 0, right = 0;
+    const bad = new Map();   // non-approved painters found in this art -> how many pixels
     const rest = [];   // pixels of other members' shares that are still to paint
     const size = team && team.size > 1 ? team.size : 1, slot = size > 1 ? Math.min(size, Math.max(1, team.slot || 1)) - 1 : 0;
     const cx = (art.w - 1) / 2, cy = (art.h - 1) / 2;
@@ -201,9 +203,10 @@
       // painted by someone who is not on the approved list: repaint it, even if the colour is right
       const who = approved && cur !== WHITE ? owner.get(i) : '';
       const foreign = !!who && !approved.has(who);
+      if (cur === c) right++;   // right colour on the board, whoever painted it: this is the % everyone sees
       if (cur === c && !foreign) { done++; if (guard) wrongSince.delete(i); continue; }
       if (!foreign && protect && cur !== WHITE && !placed.has(i)) { blocked++; continue; }
-      n++; if (foreign) retake++;
+      n++; if (foreign) { retake++; bad.set(who, (bad.get(who) || 0) + 1); }
       let score;
       if (order === 'random') score = Math.random();
       else if (order === 'center') score = (x - cx) ** 2 + (y - cy) ** 2;
@@ -236,7 +239,7 @@
       rest.sort((a, b) => a.score - b.score);
       next = rest[rest.length - 1 - Math.floor(slot * rest.length / size)].p;
     }
-    return { next, total, done, blocked, todo: n, mine, size, retake, waiting };
+    return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad };
   }
   const wrongSince = new Map(), HELP_DELAY = 8000, HELP_IDLE = 20000;
   let teamState = null;   // per share: finished pixels at the last look, and when it last grew
@@ -316,12 +319,13 @@
         const tsKey = curKey + '|' + JSON.stringify(cfg.team || 0) + '|' + cfg.order;
         if (!teamState || teamState.key !== tsKey) teamState = { key: tsKey, t0: Date.now(), head: [], seen: [] };
         const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false && !guarded, placed, cfg.order, cfg.team, guarded, teamState);
-        const progress = { total: p.total, done: p.done, blocked: p.blocked, session: sessionPainted };
+        // "done" shown to you counts every pixel with the right colour, so all teammates see the same number
+        const progress = { total: p.total, done: p.right, blocked: p.blocked, session: sessionPainted };
         if (p.size > 1) progress.team = p.mine ? `${p.mine} of your share left` : p.waiting && !p.next ? `Your share is done. Teammates are painting theirs (${p.todo} left); you step in if one stops for 20 s` : p.todo ? `Your share is done, helping a teammate who stopped (${p.todo} left)` : 'All done';
         const nGuard = guards.length;
         if (approved) {
           let unknown = 0; for (const k of watch) if (board[k] !== WHITE && !owner.has(k)) unknown++;
-          progress.who = unknown ? `Checking who painted each pixel: ${unknown} left` : p.retake ? `${p.retake} px by non-approved painters to replace` : 'All pixels are by approved painters';
+          progress.who = unknown ? `Checking who painted each pixel: ${unknown} left` : p.retake ? `Replacing ${p.retake} px painted by: ` + [...p.bad].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([nm, k]) => `${nm} (${k})`).join(', ') + '. If one of them is a teammate, add the name to the approved list.' : 'All pixels are by approved painters';
         }
         if (nGuard) progress.guard = `Protecting ${nGuard} finished art${nGuard > 1 ? 's' : ''}` + (repairLeft ? `, ${repairLeft} px to repair` : '');
         if (!p.total) { status({ state: 'error', msg: 'Your spot is outside the board. Change X/Y.' }); await sleep(IDLE, true); continue; }
@@ -362,6 +366,7 @@
 
         const isRepair = !!repair;
         const { x, y, c, i } = repair || p.next;
+        const was = board[i];
         const r = await fetch('/api/canvas/pixel', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -377,7 +382,7 @@
           pool.charges = Math.max(0, pool.charges - 1);   // spent one (the answer below corrects it)
           syncPool(j);
           await chrome.storage.local.set({ placed: [...placed] });
-          status({ state: 'painting', msg: `${isRepair ? 'Repaired' : 'Painted'} (${x}, ${y})`, pool: poolText(), eta: eta(p.todo - (isRepair ? 0 : 1)), ...progress, done: p.done + (isRepair ? 0 : 1), session: sessionPainted });
+          status({ state: 'painting', msg: `${isRepair ? 'Repaired' : 'Painted'} (${x}, ${y})`, pool: poolText(), eta: eta(p.todo - (isRepair ? 0 : 1)), ...progress, done: p.right + (isRepair || was === c ? 0 : 1), session: sessionPainted });
           await sleep(GAP);
         } else if (j.waitMs) {
           syncPool(j);
