@@ -34,6 +34,11 @@ For friends who want to paint one art together, each with their own account and 
 
 The art is split evenly between the numbers. Each bot paints its own share first, then helps with what is left, so the art still finishes if someone is offline.
 
+## Protected arts (anti-griefing)
+When the bot sees your art complete, it saves the picture and its spot in a list (shown in the popup under **Protected arts**). From then on it keeps checking those spots every few seconds while the canvas is open, and repaints any pixel that someone painted over, before it continues with new art. You can remove an art from the list, or turn the feature off with the checkbox in **Run**.
+
+In a team there is no shared server: each friend's bot adds the art to its own list when it sees it finished. The friend who owns a griefed pixel repairs it at once; the others wait 8 seconds first, so the team doesn't spend several pixels on the same one.
+
 ## Files
 - `background.js`: the 30 s check, notifications, badge, opening/closing the background tab.
 - `content.js`: the painter (runs in the site tab, as you).

@@ -143,6 +143,14 @@
     if (es) { try { es.close(); } catch { /* already closed */ } es = null; }
   }
 
+  // ---------- protected arts ----------
+  // An art that was seen complete is saved (picture + spot) in the "guard" list. From then on any pixel of it
+  // that turns wrong is griefing and gets repainted, also over other people's colours. In a team the pixel's
+  // owner repairs at once; the others give them HELP_DELAY first, so the team doesn't spend several pixels on one.
+  const artKey = (a, o) => { let h = 2166136261; for (const c of a.data) h = Math.imul(h ^ (c + 1), 16777619) >>> 0; return [o.x, o.y, a.w, a.h, h].join(','); };
+  const overlaps = (g, art, o) => g.origin.x < o.x + art.w && o.x < g.origin.x + g.art.w && g.origin.y < o.y + art.h && o.y < g.origin.y + g.art.h;
+  const NONE = new Set(), MAX_GUARD = 30;
+
   // ---------- which pixel next ----------
   // Every art pixel is: done (right colour already), blocked (someone else's colour, skipped while
   // "protect" is on) or still to paint. `order` picks among the ones still to paint.
@@ -150,7 +158,7 @@
   // share first. After that they help with whatever is left: the leftovers are put in one list and every
   // member starts at a different place in it (member 1 at the end, the others spread out before it), so
   // helpers don't pick the same pixel as each other or as the owner, who works from the start.
-  function pickNext(art, origin, protect, placed, order, team) {
+  function pickNext(art, origin, protect, placed, order, team, guard) {
     let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0;
     const rest = [];   // pixels of other members' shares that are still to paint
     const size = team && team.size > 1 ? team.size : 1, slot = size > 1 ? Math.min(size, Math.max(1, team.slot || 1)) - 1 : 0;
@@ -162,7 +170,7 @@
       if (bx < 0 || by < 0 || bx >= W || by >= H) continue;
       total++;
       const i = by * W + bx, cur = board[i];
-      if (cur === c) { done++; continue; }
+      if (cur === c) { done++; if (guard) wrongSince.delete(i); continue; }
       if (protect && cur !== WHITE && !placed.has(i)) { blocked++; continue; }
       n++;
       let score;
@@ -170,6 +178,10 @@
       else if (order === 'center') score = (x - cx) ** 2 + (y - cy) ** 2;
       else if (order === 'outline') score = (c === 27 ? 0 : 1e6) + y * art.w + x;   // black lines first
       else score = y * art.w + x;                                                   // top to bottom
+      if (guard && (x + y) % size !== slot) {   // a griefed pixel of a teammate's share: let them go first
+        if (!wrongSince.has(i)) wrongSince.set(i, Date.now());
+        if (Date.now() - wrongSince.get(i) < HELP_DELAY) continue;
+      }
       if ((x + y) % size !== slot) { rest.push({ score, p: { x: bx, y: by, c, i } }); continue; }
       mine++;
       if (score < best) { best = score; next = { x: bx, y: by, c, i }; }
@@ -180,6 +192,7 @@
     }
     return { next, total, done, blocked, todo: n, mine, size };
   }
+  const wrongSince = new Map(), HELP_DELAY = 8000;
   const eta = (todo) => {
     const ms = Math.max(0, todo - (pool.charges || 0)) * pool.period;
     return ms < 60000 ? 'under a minute' : `about ${Math.ceil(ms / 60000)} min`;
@@ -191,7 +204,7 @@
     for (;;) {
       if (!alive()) { liveStop(); return; }
       try {
-        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team']);
+        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard']);
         if (!cfg.enabled || !cfg.art || !cfg.origin) {
           liveStop();
           status({ state: 'off', msg: cfg.enabled ? 'No art or spot set yet' : 'Bot is off' });
@@ -207,16 +220,38 @@
 
         if (!board || Date.now() - boardAt > (liveOk ? BOARD_REFRESH_LIVE : BOARD_REFRESH)) await loadBoard();
         const placed = new Set(cfg.placed || []);
-        const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false, placed, cfg.order, cfg.team);
+        // protected arts first: repair what was painted over
+        const guards = Array.isArray(cfg.guard) ? cfg.guard : [], curKey = artKey(cfg.art, cfg.origin);
+        const guarded = guards.some((g) => g.key === curKey);
+        let repair = null, repairLeft = 0;
+        for (const g of guards) {
+          if (g.key === curKey || overlaps(g, cfg.art, cfg.origin)) continue;   // the current art handles its own spot
+          const gp = pickNext(g.art, g.origin, false, NONE, 'rows', { size: g.size || 1, slot: (cfg.team && cfg.team.slot) || 1 }, true);
+          repairLeft += gp.todo;
+          if (!repair && gp.next) repair = gp.next;
+        }
+        const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false && !guarded, placed, cfg.order, cfg.team, guarded);
         const progress = { total: p.total, done: p.done, blocked: p.blocked, session: sessionPainted };
         if (p.size > 1) progress.team = p.mine ? `${p.mine} of your share left` : p.todo ? `Your share is done, helping with the rest (${p.todo} left)` : 'All done';
+        const nGuard = guards.length;
+        if (nGuard) progress.guard = `Protecting ${nGuard} finished art${nGuard > 1 ? 's' : ''}` + (repairLeft ? `, ${repairLeft} px to repair` : '');
         if (!p.total) { status({ state: 'error', msg: 'Your spot is outside the board. Change X/Y.' }); await sleep(IDLE, true); continue; }
-        if (!p.next) {
+        if (!p.next && !repair && !p.todo && !p.blocked && !guarded && cfg.autoGuard !== false) {
+          // just seen complete: remember it so it gets repaired from now on
+          const entry = { key: curKey, art: cfg.art, origin: cfg.origin, size: cfg.team && cfg.team.size > 1 ? cfg.team.size : 1, t: Date.now() };
+          await chrome.storage.local.set({ guard: [...guards, entry].slice(-MAX_GUARD) });
+          continue;
+        }
+        if (!p.next && !repair && (p.todo || repairLeft)) {
+          status({ state: 'painting', ...progress, pool: poolText(), msg: 'Someone painted over a protected art. Giving the teammate who owns that pixel a few seconds to repair it first…' });
+          await sleep(3000, true); continue;
+        }
+        if (!p.next && !repair) {
           status({
             state: 'done', ...progress, pool: poolText(),
             msg: p.blocked ? `Finished what it can: ${p.blocked} px are covered by others (skipped)` : 'Art complete ✓ Watching and repairing if someone paints over it.',
           });
-          await sleep(IDLE, true); continue;
+          await sleep(nGuard ? 3000 : IDLE, true); continue;
         }
 
         const name = await getName();
@@ -232,7 +267,8 @@
           continue;
         }
 
-        const { x, y, c, i } = p.next;
+        const isRepair = !!repair;
+        const { x, y, c, i } = repair || p.next;
         const r = await fetch('/api/canvas/pixel', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -242,11 +278,11 @@
         if (j.ok) {
           fails = 0; sessionPainted++;
           if (board) board[i] = c;
-          placed.add(i);
+          if (!isRepair) placed.add(i);
           pool.charges = Math.max(0, pool.charges - 1);   // spent one (the answer below corrects it)
           syncPool(j);
           await chrome.storage.local.set({ placed: [...placed] });
-          status({ state: 'painting', msg: `Painted (${x}, ${y})`, pool: poolText(), eta: eta(p.todo - 1), ...progress, done: p.done + 1, session: sessionPainted });
+          status({ state: 'painting', msg: `${isRepair ? 'Repaired' : 'Painted'} (${x}, ${y})`, pool: poolText(), eta: eta(p.todo - (isRepair ? 0 : 1)), ...progress, done: p.done + (isRepair ? 0 : 1), session: sessionPainted });
           await sleep(GAP);
         } else if (j.waitMs) {
           syncPool(j);
@@ -273,7 +309,7 @@
   }
 
   // start/stop and new settings take effect at once instead of at the next check
-  try { chrome.storage.onChanged.addListener((ch) => { if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team) wake(); }); } catch { /* reloaded */ }
+  try { chrome.storage.onChanged.addListener((ch) => { if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard) wake(); }); } catch { /* reloaded */ }
 
   // a tab waiting for the lock says so, instead of looking dead
   status({ state: 'waiting', msg: 'Bot loaded in a site tab, starting…' });

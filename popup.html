@@ -69,6 +69,7 @@
     <legend>3. Run</legend>
     <label><input type="checkbox" id="protect" checked> Never paint over other people's pixels</label>
     <label><input type="checkbox" id="autoOpen" checked> Open the site by itself when the canvas opens</label>
+    <label><input type="checkbox" id="autoGuard" checked> Protect finished arts: repaint them if someone paints over</label>
     <label>Paint order <select id="order"><option value="rows">Top to bottom</option><option value="outline">Black outline first</option><option value="center">Middle outwards</option><option value="random">Random</option></select></label>
     <div class="row" style="margin-top:6px">
       <button id="toggle">Start</button>
@@ -88,6 +89,11 @@
     </div>
     <input type="text" id="teamCode" placeholder="Paste a friend's team code here" style="width:100%;box-sizing:border-box;margin-top:6px;background:#241c3d;color:#fff;border:1px solid #3a3157;border-radius:4px;padding:4px">
     <div id="teamInfo" class="muted" style="margin-top:4px">Each friend uses their own account, loads the same code and picks a different number.</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Protected arts</legend>
+    <div id="guardList" class="muted">None yet. An art is added here by itself when it is finished.</div>
   </fieldset>
 
   <div id="status">…</div>

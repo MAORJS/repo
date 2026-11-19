@@ -99,8 +99,9 @@ async function checkProgress(quiet) {
   if (seq !== checkSeq) return;   // X/Y changed again while loading
   if (o.x + art.w > W || o.y + art.h > H) { drawPreview(); setBar(null); $('area').innerHTML = `<span class="bad">Doesn't fit: the board is ${W}×${H}.</span>`; return; }
 
-  const { placed = [], protect = true } = await chrome.storage.local.get(['placed', 'protect']);
+  const { placed = [], protect = true, guard = [] } = await chrome.storage.local.get(['placed', 'protect', 'guard']);
   const mine = new Set(placed), WHITE = PAL.length - 1;
+  const guarded = guard.some((g) => g.key === artKey(art, o));   // a protected art is repainted over anyone
   const states = art.data.map(() => null);
   let done = 0, todo = 0, blocked = 0;
   for (let y = 0; y < art.h; y++) for (let x = 0; x < art.w; x++) {
@@ -108,7 +109,7 @@ async function checkProgress(quiet) {
     if (c < 0) continue;
     const i = (o.y + y) * W + o.x + x, cur = b[i];
     if (cur === c) { done++; states[k] = 'done'; }
-    else if (protect !== false && cur !== WHITE && !mine.has(i)) { blocked++; states[k] = 'blocked'; }
+    else if (protect !== false && !guarded && cur !== WHITE && !mine.has(i)) { blocked++; states[k] = 'blocked'; }
     else { todo++; states[k] = 'todo'; }
   }
   drawPreview(states);
@@ -228,6 +229,21 @@ $('teamLoad').onclick = async () => {
   $('teamInfo').innerHTML = `<span class="good">Loaded ✓</span> ${t.art.w}×${t.art.h} at (${t.origin.x}, ${t.origin.y}), ${t.size} friends. Now pick your number: each friend a different one.`;
 };
 
+// ---------- protected arts: finished arts the bot keeps repairing ----------
+const artKey = (a, o) => { let h = 2166136261; for (const c of a.data) h = Math.imul(h ^ (c + 1), 16777619) >>> 0; return [o.x, o.y, a.w, a.h, h].join(','); };
+async function drawGuard() {
+  const { guard = [] } = await chrome.storage.local.get('guard');
+  if (!guard.length) return ($('guardList').textContent = 'None yet. An art is added here by itself when it is finished.');
+  $('guardList').innerHTML = guard.map((g, k) => `<div class="row" style="justify-content:space-between;margin:2px 0"><span>${g.art.w}×${g.art.h} at (${g.origin.x}, ${g.origin.y})${g.size > 1 ? ', team of ' + g.size : ''}</span><button class="sec" data-k="${k}" style="padding:2px 8px">Remove</button></div>`).join('') +
+    '<div style="margin-top:4px">In a team, every friend\'s bot adds the art when it sees it finished, and repairs its own share first.</div>';
+  $('guardList').querySelectorAll('button').forEach((b) => { b.onclick = async () => {
+    const { guard = [] } = await chrome.storage.local.get('guard');
+    guard.splice(+b.dataset.k, 1);
+    await chrome.storage.local.set({ guard }); drawGuard(); checkSoon();
+  }; });
+}
+$('autoGuard').onchange = () => chrome.storage.local.set({ autoGuard: $('autoGuard').checked });
+
 // is the canvas open right now, and for how long
 let canvasMeta = null, canvasSkew = 0;
 function drawCanvasState() {
@@ -268,17 +284,19 @@ function showStatus(s) {
   const age = Math.round((Date.now() - s.t) / 1000);
   const prog = s.total ? `<br><b>${s.done}/${s.total}</b> pixels done${s.blocked ? `, ${s.blocked} skipped (someone else's)` : ''}` : '';
   const pool = s.pool ? `<br>🟪 ${s.pool}` : '';
-  const team = s.team ? `<br>👥 ${s.team}` : '';
+  const team = (s.team ? `<br>👥 ${s.team}` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '');
   const extra = team + (s.state === 'painting' && s.eta ? `<br>Time left: ${s.eta}` : '') + (s.session ? `<br><span class="muted">${s.session} painted since this tab opened</span>` : '');
   $('status').className = s.state || '';
   // keep the preview in step with the bot while it paints
   if (s.state === 'painting' && art && Date.now() - lastCheck > 5000) checkProgress(true);
   $('status').innerHTML = `${s.msg}${pool}${prog}${extra}<br><span class="muted">${age > 30 ? `last update ${age}s ago, is a site tab open?` : ''}</span>`;
 }
-chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); });
+chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); });
 
 (async () => {
-  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team']);
+  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard']);
+  $('autoGuard').checked = s.autoGuard !== false;
+  drawGuard();
   drawTeam(s.team);
   $('order').value = s.order || 'rows';
   if (s.presetId) { $('preset').value = s.presetId; $('scale').value = String(s.presetScale || 1); }
