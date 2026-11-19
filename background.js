@@ -28,7 +28,7 @@ async function poll() {
   try { meta = await (await fetch(BASE + '/api/canvas/meta', { cache: 'no-store' })).json(); }
   catch { return; }
   const open = isOpen(meta);
-  const { wasOpen, enabled, autoOpen = true, art, status, autoTab } = await chrome.storage.local.get(['wasOpen', 'enabled', 'autoOpen', 'art', 'status', 'autoTab']);
+  const { wasOpen, enabled, autoOpen = true, art, status, autoTab, reloadAt = 0 } = await chrome.storage.local.get(['wasOpen', 'enabled', 'autoOpen', 'art', 'status', 'autoTab', 'reloadAt']);
   badge(open, status);
 
   if (open && !wasOpen) {
@@ -43,6 +43,15 @@ async function poll() {
       const tab = await chrome.tabs.create({ url: BASE + '/canvas', active: false });
       try { await chrome.tabs.update(tab.id, { autoDiscardable: false }); } catch { /* older browser */ }
       await chrome.storage.local.set({ autoTab: tab.id });
+    }
+  }
+  // The painter reports every few seconds. If the site answers (we just got its status) but the painter has
+  // been silent for 90 s, its tab lost the connection, shows an error page, or was put to sleep: refresh it.
+  if (open && wasOpen && enabled && art && (!status || Date.now() - status.t > 90000) && Date.now() - reloadAt > 120000) {
+    const tabs = await chrome.tabs.query({ url: BASE + '/*' });
+    if (tabs.length) {
+      await chrome.storage.local.set({ reloadAt: Date.now() });
+      for (const t of tabs) { try { await chrome.tabs.reload(t.id); } catch { /* closed meanwhile */ } }
     }
   }
   // the canvas closed: close the tab this extension opened by itself, unless you are looking at it

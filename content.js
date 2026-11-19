@@ -39,10 +39,27 @@
   let W = 0, H = 0, WHITE = 31;
   let board = null, boardAt = 0, meta = null, metaAt = 0, clock = 0;   // clock: server time − my time
   let myName = '', nameAt = 0, sessionPainted = 0;
+  let netFails = 0, wantOn = false;   // failed requests in a row; is the bot switched on
+  const WHO_GAP = 250;                // pause between "who painted this pixel" questions
+  const DEFAULT_APPROVED = ['kgsx', 'ksgxl', 'kgsxs'];
   const serverNow = () => Date.now() + clock;
   const isOpen = (m) => !!m && !!m.open && (m.paused != null || m.openUntil > serverNow());
   const alive = () => { try { return !!chrome.runtime?.id; } catch { return false; } };
   const status = (s) => { try { chrome.storage.local.set({ status: { ...s, t: Date.now() } }).catch(() => {}); } catch { /* reloaded */ } };
+
+  // ---------- lost connection: after a few failed requests in a row, refresh the page ----------
+  // (if the page can't load at all, background.js reloads the tab once the site answers again)
+  function lostConnection() {
+    if (!wantOn || ++netFails < 4) return false;
+    let last = 0;
+    try { last = +sessionStorage.getItem('artbot-reload') || 0; } catch { /* storage blocked */ }
+    if (Date.now() - last < 120000) return false;
+    try { sessionStorage.setItem('artbot-reload', String(Date.now())); } catch { /* storage blocked */ }
+    status({ state: 'error', msg: 'Lost connection to the site. Refreshing the page…' });
+    liveStop();
+    setTimeout(() => location.reload(), 300);
+    return true;
+  }
 
   // ---------- the pixel pool, counted the same way the site's own page does ----------
   // charges: pixels you have now (null = not asked yet); nextAt: when the next one arrives
@@ -83,13 +100,15 @@
     if (typeof m.t === 'number') clock = m.t - Date.now();
     if (W && (m.w !== W || m.h !== H)) board = null;   // the canvas was resized
     W = m.w; H = m.h; WHITE = m.palette.length - 1;
-    meta = m; metaAt = Date.now();
+    meta = m; metaAt = Date.now(); netFails = 0;
     return m;
   }
   async function loadBoard() {
     const b = new Uint8Array(await (await fetch('/api/canvas', { cache: 'no-store' })).arrayBuffer());
     if (b.length !== W * H) { await getMeta(); if (b.length !== W * H) throw new Error('board size mismatch'); }
-    board = b; boardAt = Date.now();
+    // a pixel that changed while we were not listening has an unknown painter again
+    if (board && board.length === b.length) for (const k of [...owner.keys()]) if (board[k] !== b[k]) owner.delete(k);
+    board = b; boardAt = Date.now(); netFails = 0;
   }
   async function getName() {
     if (myName && Date.now() - nameAt < NAME_REFRESH) return myName;
@@ -123,7 +142,7 @@
       if (!board || !Array.isArray(b)) return;
       for (let k = 0; k + 2 < b.length; k += 3) {
         const x = b[k], y = b[k + 1];
-        if (x >= 0 && x < W && y >= 0 && y < H) board[y * W + x] = b[k + 2];
+        if (x >= 0 && x < W && y >= 0 && y < H) { board[y * W + x] = b[k + 2]; owner.delete(y * W + x); dirty.add(y * W + x); }
       }
     }));
     es.addEventListener('status', json((s) => {
@@ -159,7 +178,7 @@
   // member starts at a different place in it (member 1 at the end, the others spread out before it), so
   // helpers don't pick the same pixel as each other or as the owner, who works from the start.
   function pickNext(art, origin, protect, placed, order, team, guard) {
-    let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0;
+    let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0, retake = 0;
     const rest = [];   // pixels of other members' shares that are still to paint
     const size = team && team.size > 1 ? team.size : 1, slot = size > 1 ? Math.min(size, Math.max(1, team.slot || 1)) - 1 : 0;
     const cx = (art.w - 1) / 2, cy = (art.h - 1) / 2;
@@ -170,9 +189,12 @@
       if (bx < 0 || by < 0 || bx >= W || by >= H) continue;
       total++;
       const i = by * W + bx, cur = board[i];
-      if (cur === c) { done++; if (guard) wrongSince.delete(i); continue; }
-      if (protect && cur !== WHITE && !placed.has(i)) { blocked++; continue; }
-      n++;
+      // painted by someone who is not on the approved list: repaint it, even if the colour is right
+      const who = approved && cur !== WHITE ? owner.get(i) : '';
+      const foreign = !!who && !approved.has(who);
+      if (cur === c && !foreign) { done++; if (guard) wrongSince.delete(i); continue; }
+      if (!foreign && protect && cur !== WHITE && !placed.has(i)) { blocked++; continue; }
+      n++; if (foreign) retake++;
       let score;
       if (order === 'random') score = Math.random();
       else if (order === 'center') score = (x - cx) ** 2 + (y - cy) ** 2;
@@ -190,9 +212,33 @@
       rest.sort((a, b) => a.score - b.score);
       next = rest[rest.length - 1 - Math.floor(slot * rest.length / size)].p;
     }
-    return { next, total, done, blocked, todo: n, mine, size };
+    return { next, total, done, blocked, todo: n, mine, size, retake };
   }
   const wrongSince = new Map(), HELP_DELAY = 8000;
+  // approved painters: null = feature off, else the lower-case names whose pixels are left alone
+  let approved = null, watch = [];
+  const owner = new Map(), dirty = new Set();   // board index -> who painted it ('' = nobody)
+  // asks the site, one pixel at a time, who painted the pixels of your arts
+  async function whoLoop() {
+    for (;;) {
+      if (!alive()) return;
+      let i = -1;
+      if (approved && board && isOpen(meta)) for (const k of watch) if (board[k] !== WHITE && !owner.has(k)) { i = k; break; }
+      if (i < 0) { await sleep(1500); continue; }
+      try {
+        dirty.delete(i);
+        const j = await (await fetch('/api/canvas/who?x=' + (i % W) + '&y=' + Math.floor(i / W), { cache: 'no-store' })).json();
+        if (!dirty.has(i)) owner.set(i, String(j.name || '').toLowerCase());   // repainted meanwhile: ask again
+        await sleep(WHO_GAP);
+      } catch { await sleep(5000); }
+    }
+  }
+  const footprint = (list, a, o) => {
+    for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
+      const bx = o.x + x, by = o.y + y;
+      if (a.data[y * a.w + x] >= 0 && bx >= 0 && by >= 0 && bx < W && by < H) list.push(by * W + bx);
+    }
+  };
   const eta = (todo) => {
     const ms = Math.max(0, todo - (pool.charges || 0)) * pool.period;
     return ms < 60000 ? 'under a minute' : `about ${Math.ceil(ms / 60000)} min`;
@@ -204,7 +250,8 @@
     for (;;) {
       if (!alive()) { liveStop(); return; }
       try {
-        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard']);
+        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard', 'approved', 'approvedOn']);
+        wantOn = !!cfg.enabled;
         if (!cfg.enabled || !cfg.art || !cfg.origin) {
           liveStop();
           status({ state: 'off', msg: cfg.enabled ? 'No art or spot set yet' : 'Bot is off' });
@@ -222,6 +269,17 @@
         const placed = new Set(cfg.placed || []);
         // protected arts first: repair what was painted over
         const guards = Array.isArray(cfg.guard) ? cfg.guard : [], curKey = artKey(cfg.art, cfg.origin);
+        // approved painters: your own account plus the names in the popup
+        if (cfg.approvedOn === false) { approved = null; watch = []; }
+        else {
+          const me = (await getName()).toLowerCase();
+          approved = new Set((Array.isArray(cfg.approved) ? cfg.approved : DEFAULT_APPROVED).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
+          if (me) approved.add(me);
+          const list = [];
+          footprint(list, cfg.art, cfg.origin);
+          for (const g of guards) footprint(list, g.art, g.origin);
+          watch = list;
+        }
         const guarded = guards.some((g) => g.key === curKey);
         let repair = null, repairLeft = 0;
         for (const g of guards) {
@@ -234,6 +292,10 @@
         const progress = { total: p.total, done: p.done, blocked: p.blocked, session: sessionPainted };
         if (p.size > 1) progress.team = p.mine ? `${p.mine} of your share left` : p.todo ? `Your share is done, helping with the rest (${p.todo} left)` : 'All done';
         const nGuard = guards.length;
+        if (approved) {
+          let unknown = 0; for (const k of watch) if (board[k] !== WHITE && !owner.has(k)) unknown++;
+          progress.who = unknown ? `Checking who painted each pixel: ${unknown} left` : p.retake ? `${p.retake} px by non-approved painters to replace` : 'All pixels are by approved painters';
+        }
         if (nGuard) progress.guard = `Protecting ${nGuard} finished art${nGuard > 1 ? 's' : ''}` + (repairLeft ? `, ${repairLeft} px to repair` : '');
         if (!p.total) { status({ state: 'error', msg: 'Your spot is outside the board. Change X/Y.' }); await sleep(IDLE, true); continue; }
         if (!p.next && !repair && !p.todo && !p.blocked && !guarded && cfg.autoGuard !== false) {
@@ -251,7 +313,7 @@
             state: 'done', ...progress, pool: poolText(),
             msg: p.blocked ? `Finished what it can: ${p.blocked} px are covered by others (skipped)` : 'Art complete ✓ Watching and repairing if someone paints over it.',
           });
-          await sleep(nGuard ? 3000 : IDLE, true); continue;
+          await sleep(nGuard || approved ? 3000 : IDLE, true); continue;
         }
 
         const name = await getName();
@@ -275,9 +337,11 @@
           body: JSON.stringify({ x, y, c, name }),
         });
         const j = await r.json().catch(() => ({}));
+        if (r.status < 500) netFails = 0; else if (lostConnection()) return;
         if (j.ok) {
           fails = 0; sessionPainted++;
           if (board) board[i] = c;
+          owner.set(i, name.toLowerCase());
           if (!isRepair) placed.add(i);
           pool.charges = Math.max(0, pool.charges - 1);   // spent one (the answer below corrects it)
           syncPool(j);
@@ -300,6 +364,7 @@
         }
       } catch (e) {
         if (!alive()) { liveStop(); return; }
+        if (lostConnection()) return;
         fails++;
         console.warn('[artbot]', e);
         status({ state: 'error', msg: 'Error: ' + (e && e.message ? e.message : e) + '. Retrying…' });
@@ -309,10 +374,11 @@
   }
 
   // start/stop and new settings take effect at once instead of at the next check
-  try { chrome.storage.onChanged.addListener((ch) => { if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard) wake(); }); } catch { /* reloaded */ }
+  try { chrome.storage.onChanged.addListener((ch) => { if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard || ch.approved || ch.approvedOn) wake(); }); } catch { /* reloaded */ }
 
   // a tab waiting for the lock says so, instead of looking dead
   status({ state: 'waiting', msg: 'Bot loaded in a site tab, starting…' });
-  if (navigator.locks) navigator.locks.request('odedsvr-artbot', () => loop());
-  else loop();
+  const run = () => { whoLoop(); return loop(); };
+  if (navigator.locks) navigator.locks.request('odedsvr-artbot', run);
+  else run();
 })();

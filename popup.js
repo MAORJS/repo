@@ -125,7 +125,7 @@ async function checkProgress(quiet) {
   const mins = Math.ceil(Math.max(0, todo - 10) * 5 / 60);
   let html = `<b>${done}/${total}</b> already done (${pct}%)`;
   html += todo ? `, <b>${todo}</b> left ≈ ${todo <= 10 ? 'under a minute' : mins + ' min'}` : ' <span class="good">✓ nothing left to paint</span>';
-  if (blocked) html += `<br><span class="bad">${blocked} pixels are someone else's</span> (red in the preview, skipped). Try "Find empty spot".`;
+  if (blocked) html += `<br><span class="bad">${blocked} pixels are someone else's</span> (red in the preview). ${$('approvedOn').checked ? 'The bot replaces the ones not painted by an approved name.' : 'Skipped.'} Try "Find empty spot".`;
   else if (!done) html += `<br><span class="good">Spot is free ✓</span>`;
   $('area').innerHTML = html + share;
 }
@@ -242,6 +242,12 @@ async function drawGuard() {
     await chrome.storage.local.set({ guard }); drawGuard(); checkSoon();
   }; });
 }
+const DEFAULT_APPROVED = ['kgsx', 'ksgxl', 'kgsxs'];
+const saveApproved = () => chrome.storage.local.set({
+  approvedOn: $('approvedOn').checked,
+  approved: $('approved').value.split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean),
+});
+$('approvedOn').onchange = saveApproved; $('approved').onchange = saveApproved;
 $('autoGuard').onchange = () => chrome.storage.local.set({ autoGuard: $('autoGuard').checked });
 
 // is the canvas open right now, and for how long
@@ -284,7 +290,7 @@ function showStatus(s) {
   const age = Math.round((Date.now() - s.t) / 1000);
   const prog = s.total ? `<br><b>${s.done}/${s.total}</b> pixels done${s.blocked ? `, ${s.blocked} skipped (someone else's)` : ''}` : '';
   const pool = s.pool ? `<br>🟪 ${s.pool}` : '';
-  const team = (s.team ? `<br>👥 ${s.team}` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '');
+  const team = (s.team ? `<br>👥 ${s.team}` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '') + (s.who ? `<br>🔎 ${s.who}` : '');
   const extra = team + (s.state === 'painting' && s.eta ? `<br>Time left: ${s.eta}` : '') + (s.session ? `<br><span class="muted">${s.session} painted since this tab opened</span>` : '');
   $('status').className = s.state || '';
   // keep the preview in step with the bot while it paints
@@ -294,7 +300,9 @@ function showStatus(s) {
 chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); });
 
 (async () => {
-  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard']);
+  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn']);
+  $('approvedOn').checked = s.approvedOn !== false;
+  $('approved').value = (Array.isArray(s.approved) ? s.approved : DEFAULT_APPROVED).join(', ');
   $('autoGuard').checked = s.autoGuard !== false;
   drawGuard();
   drawTeam(s.team);
