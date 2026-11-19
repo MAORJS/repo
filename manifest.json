@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Canvas Art Bot (odedsvrmonopoly)",
+  "version": "1.2.0",
+  "description": "Watches the odedsvrmonopoly.app canvas and paints your own pixel art in a spot you choose, one pixel every 5 seconds.",
+  "permissions": ["storage", "alarms", "notifications", "tabs"],
+  "host_permissions": ["https://odedsvrmonopoly.app/*"],
+  "icons": { "128": "icon.png" },
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Canvas Art Bot" },
+  "content_scripts": [
+    {
+      "matches": ["https://odedsvrmonopoly.app/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

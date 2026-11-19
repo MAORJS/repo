@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 320px; margin: 0; padding: 12px; font: 13px system-ui, sans-serif; background: #17112a; color: #eee; }
+  h1 { font-size: 15px; margin: 0 0 10px; }
+  fieldset { border: 1px solid #3a3157; border-radius: 8px; margin: 0 0 10px; padding: 8px 10px; }
+  legend { color: #a99be0; padding: 0 4px; }
+  label { display: block; margin: 4px 0; }
+  select { background: #241c3d; color: #fff; border: 1px solid #3a3157; border-radius: 4px; padding: 3px; }
+  input[type=number] { width: 64px; background: #241c3d; color: #fff; border: 1px solid #3a3157; border-radius: 4px; padding: 3px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button { background: #6a5cff; color: #fff; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-weight: 600; }
+  button.sec { background: #3a3157; }
+  button.stop { background: #be0039; }
+  #preview { image-rendering: pixelated; background: repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 8px 8px; max-width: 100%; display: block; margin-top: 6px; border-radius: 4px; }
+  #status { background: #241c3d; border-radius: 6px; padding: 8px; min-height: 34px; }
+  #status b { color: #7eed56; }
+  .muted { color: #9a93b5; font-size: 12px; }
+  #area { margin-top: 6px; }
+  .bad { color: #ff99aa; } .good { color: #7eed56; }
+  .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .head h1 { margin: 0; }
+  .pill { font-size: 11px; padding: 3px 8px; border-radius: 99px; background: #3a3157; color: #c9c2e6; white-space: nowrap; }
+  .pill.on { background: #00a368; color: #fff; }
+  #bar { height: 8px; border-radius: 4px; background: #3a3157; margin-top: 6px; overflow: hidden; display: flex; }
+  #bar[hidden] { display: none; }
+  #barDone { background: #7eed56; } #barBlocked { background: #ff2840; }
+  #status { border-left: 4px solid #3a3157; }
+  #status.painting { border-left-color: #6a5cff; } #status.done { border-left-color: #7eed56; }
+  #status.error { border-left-color: #be0039; } #status.waiting { border-left-color: #ffa800; }
+</style>
+</head>
+<body>
+  <div class="head"><h1>🎨 Canvas Art Bot</h1><span class="pill" id="canvasState">…</span></div>
+
+  <fieldset>
+    <legend>1. Your art</legend>
+    <div class="row">
+      <select id="preset"><option value="">Pick a built-in art…</option></select>
+      <select id="scale"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select>
+    </div>
+    <div class="muted" style="margin:6px 0 4px">or upload your own:</div>
+    <input type="file" id="file" accept="image/*">
+    <div class="row" style="margin-top:6px">
+      <label>Max size <input type="number" id="maxSize" value="32" min="1" max="200"> px</label>
+    </div>
+    <canvas id="preview" width="1" height="1"></canvas>
+    <div id="bar" hidden><div id="barDone"></div><div id="barBlocked"></div></div>
+    <div id="artInfo" class="muted">No art yet. Upload a small PNG (transparent pixels are skipped).</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>2. Your spot on the board (top-left corner)</legend>
+    <div class="row">
+      <label>X <input type="number" id="ox" value="0" min="0"></label>
+      <label>Y <input type="number" id="oy" value="0" min="0"></label>
+    </div>
+    <div class="row">
+      <button class="sec" id="check">Check progress</button>
+      <button class="sec" id="find">Find empty spot</button>
+    </div>
+    <div id="area" class="muted">Tip: hover a pixel on the canvas page to see its coordinates.</div>
+    <div class="muted" style="margin-top:4px">Preview: full colour = already done, faded = still to paint, red = someone else's.</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>3. Run</legend>
+    <label><input type="checkbox" id="protect" checked> Never paint over other people's pixels</label>
+    <label><input type="checkbox" id="autoOpen" checked> Open the site by itself when the canvas opens</label>
+    <label>Paint order <select id="order"><option value="rows">Top to bottom</option><option value="outline">Black outline first</option><option value="center">Middle outwards</option><option value="random">Random</option></select></label>
+    <div class="row" style="margin-top:6px">
+      <button id="toggle">Start</button>
+      <button class="sec" id="openSite">Open canvas</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Team (optional): one art with friends</legend>
+    <div class="row">
+      <label>Friends painting <select id="teamSize"><option value="1">just me</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
+      <label>I am number <select id="teamSlot"></select></label>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <button class="sec" id="teamCopy">Copy team code</button>
+      <button class="sec" id="teamLoad">Load code</button>
+    </div>
+    <input type="text" id="teamCode" placeholder="Paste a friend's team code here" style="width:100%;box-sizing:border-box;margin-top:6px;background:#241c3d;color:#fff;border:1px solid #3a3157;border-radius:4px;padding:4px">
+    <div id="teamInfo" class="muted" style="margin-top:4px">Each friend uses their own account, loads the same code and picks a different number.</div>
+  </fieldset>
+
+  <div id="status">…</div>
+  <script src="presets.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

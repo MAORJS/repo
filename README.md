@@ -1,0 +1,41 @@
+# Canvas Art Bot (odedsvrmonopoly.app)
+
+A Chrome/Edge extension. It watches for the canvas to open and paints your pixel art in a spot you choose, using only your own pixels.
+
+## Install
+1. Open `chrome://extensions` (or `edge://extensions`).
+2. Turn on **Developer mode**.
+3. Click **Load unpacked** and pick this `canvas-artbot` folder.
+
+After changing any file: click the reload icon on the extension's card, then refresh any open odedsvrmonopoly.app tab.
+
+## Use
+1. Log in on odedsvrmonopoly.app with Kick like you normally do.
+2. Click the extension icon:
+   - **Your art**: pick a built-in art (1×–4× size) or upload a small image. Uploads are shrunk to "Max size" and matched to the site's 32 colors. Transparent pixels are left alone.
+   - **Your spot**: type the top-left X/Y, or click **Find empty spot** for the closest all-white area with a 2 px gap around it. The popup checks the board there by itself and shows what is already done (full color), still to paint (faded) and someone else's (red), with a progress bar.
+   - **Run**: choose a paint order (top to bottom, black outline first, middle outwards, random) and click **Start**.
+3. Leave Chrome running. The pill at the top of the popup shows whether the canvas is open and for how long.
+
+## What it does by itself
+- **Notices the canvas opening.** A site tab that is already open hears it instantly from the site's live feed. Otherwise the extension checks every 30 s, sends a notification, and opens a background tab. That tab is closed again when the canvas closes (unless you are looking at it).
+- **Uses your pixel pool.** You can hold up to 10 pixels and get one more every 5 s. It asks the site how many you have, paints right away while you have some, and waits only when you are out.
+- **Stays in step with the board.** It follows every pixel anyone paints through the live feed, skips what is already right, and repaints its own pixels if someone covers them.
+- **Never paints over others** (while that option is on): it only paints white pixels and pixels it placed itself.
+- **Keeps its pace in a background tab.** Its timers run in a worker, so Chrome's background-tab slowdown doesn't apply.
+- **Reports.** The toolbar badge shows progress in %, ✓ when finished, `OPEN` when the canvas is open, `!` on an error. You get a notification when the art is finished.
+- If you have several site tabs open, only one paints.
+
+## Team mode (optional)
+For friends who want to paint one art together, each with their own account and their own pixels.
+1. One friend sets up the art and the spot, sets **Friends painting** to the number of people, and clicks **Copy team code**.
+2. Everyone else pastes that code and clicks **Load code**. This gives them the same art, spot and team size.
+3. Each friend picks a different **I am number**, then clicks Start.
+
+The art is split evenly between the numbers. Each bot paints its own share first, then helps with what is left, so the art still finishes if someone is offline.
+
+## Files
+- `background.js`: the 30 s check, notifications, badge, opening/closing the background tab.
+- `content.js`: the painter (runs in the site tab, as you).
+- `popup.html` / `popup.js`: the settings window.
+- `presets.js`: built-in arts as text rows, one letter per color. Copy a block to add your own.
