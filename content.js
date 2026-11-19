@@ -278,7 +278,7 @@
     for (;;) {
       if (!alive()) { liveStop(); return; }
       try {
-        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard', 'approved', 'approvedOn']);
+        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats']);
         wantOn = !!cfg.enabled;
         if (!cfg.enabled || !cfg.art || !cfg.origin) {
           liveStop();
@@ -381,7 +381,13 @@
           if (!isRepair) placed.add(i);
           pool.charges = Math.max(0, pool.charges - 1);   // spent one (the answer below corrects it)
           syncPool(j);
-          await chrome.storage.local.set({ placed: [...placed] });
+          const save = { placed: [...placed] };
+          if (cfg.night) {   // the night report: what was done while you slept
+            const st = { painted: 0, repaired: 0, replaced: 0, ...(cfg.nightStats || {}) };
+            if (was === c) st.replaced++; else if (isRepair || guarded) st.repaired++; else st.painted++;
+            save.nightStats = st;
+          }
+          await chrome.storage.local.set(save);
           status({ state: 'painting', msg: `${isRepair ? 'Repaired' : 'Painted'} (${x}, ${y})`, pool: poolText(), eta: eta(p.todo - (isRepair ? 0 : 1)), ...progress, done: p.right + (isRepair || was === c ? 0 : 1), session: sessionPainted });
           await sleep(GAP);
         } else if (j.waitMs) {

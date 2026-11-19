@@ -4,7 +4,23 @@
 const BASE = 'https://odedsvrmonopoly.app';
 
 const isOpen = (m) => !!m && m.open && (m.paused != null || m.openUntil > m.t);
-const note = (id, title, message) => chrome.notifications.create(id, { type: 'basic', iconUrl: 'icon.png', title, message });
+// ---------- night mode: runs unattended ----------
+// Keeps the computer awake, opens/refreshes the site tab by itself, stays quiet (no notifications) and
+// writes what happened into a log the popup shows in the morning.
+async function nightLog(msg) {
+  const { night, nightLog: log = [] } = await chrome.storage.local.get(['night', 'nightLog']);
+  if (!night || (log.length && log[log.length - 1].msg === msg)) return;
+  await chrome.storage.local.set({ nightLog: [...log, { t: Date.now(), msg }].slice(-60) });
+}
+async function keepAwake() {
+  const { night, enabled } = await chrome.storage.local.get(['night', 'enabled']);
+  try { if (night && enabled) chrome.power.requestKeepAwake('system'); else chrome.power.releaseKeepAwake(); } catch { /* no power permission */ }
+}
+const note = async (id, title, message) => {
+  const { night } = await chrome.storage.local.get('night');
+  if (night) return nightLog(title);   // asleep: write it down instead of making a sound
+  chrome.notifications.create(id, { type: 'basic', iconUrl: 'icon.png', title, message });
+};
 
 function ensureAlarm() {
   chrome.alarms.get('poll', (a) => { if (!a) chrome.alarms.create('poll', { periodInMinutes: 0.5 }); });
@@ -24,11 +40,13 @@ function badge(open, s) {
 }
 
 async function poll() {
+  keepAwake();
   let meta;
   try { meta = await (await fetch(BASE + '/api/canvas/meta', { cache: 'no-store' })).json(); }
   catch { return; }
   const open = isOpen(meta);
-  const { wasOpen, enabled, autoOpen = true, art, status, autoTab, reloadAt = 0 } = await chrome.storage.local.get(['wasOpen', 'enabled', 'autoOpen', 'art', 'status', 'autoTab', 'reloadAt']);
+  const { wasOpen, enabled, autoOpen = true, art, status, autoTab, reloadAt = 0, night } = await chrome.storage.local.get(['wasOpen', 'enabled', 'autoOpen', 'art', 'status', 'autoTab', 'reloadAt', 'night']);
+  if (!open && wasOpen) nightLog('The canvas closed');
   badge(open, status);
 
   if (open && !wasOpen) {
@@ -36,13 +54,14 @@ async function poll() {
     note('open', 'The canvas is open!' + (mins ? ` (${mins} min)` : ''),
       (enabled && art ? 'Painting your art now.' : 'Turn the bot on in the popup to paint.') + (meta.theme ? ` Theme: ${meta.theme}` : ''));
   }
-  if (open && enabled && art && autoOpen) {
+  if (open && enabled && art && (autoOpen || night)) {
     const tabs = await chrome.tabs.query({ url: BASE + '/*' });
     if (!tabs.length) {
       // a background tab of our own; told not to be put to sleep by the browser's memory saver
       const tab = await chrome.tabs.create({ url: BASE + '/canvas', active: false });
       try { await chrome.tabs.update(tab.id, { autoDiscardable: false }); } catch { /* older browser */ }
       await chrome.storage.local.set({ autoTab: tab.id });
+      nightLog('Opened the site in a background tab');
     }
   }
   // The painter reports every few seconds. If the site answers (we just got its status) but the painter has
@@ -51,6 +70,7 @@ async function poll() {
     const tabs = await chrome.tabs.query({ url: BASE + '/*' });
     if (tabs.length) {
       await chrome.storage.local.set({ reloadAt: Date.now() });
+      nightLog('The site tab stopped answering, refreshed it');
       for (const t of tabs) { try { await chrome.tabs.reload(t.id); } catch { /* closed meanwhile */ } }
     }
   }
@@ -65,8 +85,10 @@ async function poll() {
 
 // the painter reports through storage: update the badge, and say when the art is finished
 chrome.storage.onChanged.addListener(async (ch) => {
+  if (ch.night || ch.enabled) keepAwake();
   if (!ch.status) return;
   const s = ch.status.newValue, old = ch.status.oldValue;
+  if (s && s.state === 'error' && (!old || old.msg !== s.msg)) nightLog('Problem: ' + s.msg);
   const { wasOpen, doneNoteAt = 0 } = await chrome.storage.local.get(['wasOpen', 'doneNoteAt']);
   badge(!!wasOpen, s);
   if (s && s.state === 'done' && old && old.state === 'painting' && Date.now() - doneNoteAt > 10 * 60000) {

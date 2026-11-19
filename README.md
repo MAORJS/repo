@@ -45,6 +45,15 @@ With **Only approved painters** on (in **Run**), the bot asks the site who paint
 ## Lost connection
 If several requests to the site fail in a row, the bot refreshes the page (at most once every 2 minutes). If the tab can't load at all or was put to sleep, the extension reloads it once the site answers again and the canvas is open.
 
+## Night mode
+Tick **Night mode** in **Run** before you go to sleep. It starts the bot and then needs nothing from you:
+- keeps the computer from going to sleep (the screen may still turn off),
+- opens the site in a background tab when the canvas opens, and refreshes it if it stops answering,
+- sends no notifications,
+- writes a **Night report** in the popup: pixels painted, repaired and taken back, and what happened at what time.
+
+It can't log in for you: stay logged in on the site and leave Chrome open. Closing a laptop lid usually still puts it to sleep. **Stop** ends night mode.
+
 ## Files
 - `background.js`: the 30 s check, notifications, badge, opening/closing the background tab.
 - `content.js`: the painter (runs in the site tab, as you).

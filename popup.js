@@ -265,6 +265,28 @@ const saveApproved = () => chrome.storage.local.set({
 $('approvedOn').onchange = saveApproved; $('approved').onchange = saveApproved;
 $('autoGuard').onchange = () => chrome.storage.local.set({ autoGuard: $('autoGuard').checked });
 
+// ---------- night mode: the bot runs unattended and keeps a report ----------
+async function drawNight() {
+  const { night, nightSince, nightStats, nightLog = [] } = await chrome.storage.local.get(['night', 'nightSince', 'nightStats', 'nightLog']);
+  $('night').checked = !!night;
+  $('nightBox').hidden = !night && !nightSince;
+  if ($('nightBox').hidden) return;
+  const st = { painted: 0, repaired: 0, replaced: 0, ...(nightStats || {}) };
+  const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  $('nightReport').innerHTML = `${night ? 'Running' : 'Stopped'}, started ${nightSince ? hhmm(nightSince) : '?'}<br><b>${st.painted}</b> pixels painted, <b>${st.repaired}</b> repaired, <b>${st.replaced}</b> taken back from non-approved painters` +
+    (nightLog.length ? '<br>' + nightLog.slice(-8).map((e) => `${hhmm(e.t)} ${e.msg}`).join('<br>') : '<br>Nothing else happened yet.');
+}
+$('night').onchange = async () => {
+  const on = $('night').checked;
+  if (on && !art) { $('night').checked = false; return ($('status').textContent = 'Pick or upload an art first (step 1).'); }
+  if (on) {
+    await saveOrigin();
+    await chrome.storage.local.set({ night: true, enabled: true, autoOpen: true, nightSince: Date.now(), nightStats: { painted: 0, repaired: 0, replaced: 0 }, nightLog: [] });
+    $('autoOpen').checked = true; paintToggle(true);
+  } else await chrome.storage.local.set({ night: false });
+  drawNight();
+};
+
 // is the canvas open right now, and for how long
 let canvasMeta = null, canvasSkew = 0;
 function drawCanvasState() {
@@ -296,7 +318,7 @@ $('toggle').onclick = async () => {
     const tabs = await chrome.tabs.query({ url: BASE + '/*' });
     if (!tabs.length) chrome.tabs.create({ url: BASE + '/canvas', active: false });
   }
-  await chrome.storage.local.set({ enabled: !enabled });
+  await chrome.storage.local.set(enabled ? { enabled: false, night: false } : { enabled: true });   // Stop also ends night mode
   paintToggle(!enabled);
 };
 
@@ -322,11 +344,12 @@ function showStatus(s) {
   if (s.state === 'painting' && art && Date.now() - lastCheck > 5000) checkProgress(true);
   $('status').innerHTML = `${s.msg}${pool}${prog}${extra}<br><span class="muted">${age > 30 ? `last update ${age}s ago. If the bot is on, the site tab is refreshed by itself.` : ''}</span>`;
 }
-chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); if (ch.me) drawMe(ch.me.newValue); });
+chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); if (ch.me) drawMe(ch.me.newValue); if (ch.nightStats || ch.nightLog || ch.night) drawNight(); });
 
 (async () => {
   const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'me']);
   drawMe(s.me);
+  drawNight();
   $('approvedOn').checked = s.approvedOn !== false;
   $('approved').value = (Array.isArray(s.approved) ? s.approved : DEFAULT_APPROVED).join(', ');
   $('autoGuard').checked = s.autoGuard !== false;

@@ -75,6 +75,8 @@
     <div class="muted" style="margin-bottom:6px">Your own account is always approved. Every teammate must be on everyone's list, or the bots repaint each other's pixels. The team code carries the list.</div>
     <div id="meName" class="good" style="margin-bottom:6px;font-size:12px"></div>
     <label>Paint order <select id="order"><option value="rows">Top to bottom</option><option value="outline">Black outline first</option><option value="center">Middle outwards</option><option value="random">Random (solo only)</option></select></label>
+    <label><input type="checkbox" id="night"> 🌙 Night mode: run fully by itself while I sleep</label>
+    <div class="muted" style="margin-bottom:4px">Starts the bot, keeps the computer awake, opens and refreshes the site by itself, sends no notifications, and keeps a report. Leave Chrome open and stay logged in on the site.</div>
     <div class="row" style="margin-top:6px">
       <button id="toggle">Start</button>
       <button class="sec" id="openSite">Open canvas</button>
@@ -98,6 +100,11 @@
   <fieldset>
     <legend>Protected arts</legend>
     <div id="guardList" class="muted">None yet. An art is added here by itself when it is finished.</div>
+  </fieldset>
+
+  <fieldset id="nightBox" hidden>
+    <legend>🌙 Night report</legend>
+    <div id="nightReport" class="muted"></div>
   </fieldset>
 
   <div id="status">…</div>
