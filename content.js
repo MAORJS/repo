@@ -110,7 +110,7 @@
     if (b.length !== W * H) { await getMeta(); if (b.length !== W * H) throw new Error('board size mismatch'); }
     // a pixel that changed while we were not listening has an unknown painter again
     if (board && board.length === b.length) for (const k of [...owner.keys()]) if (board[k] !== b[k]) owner.delete(k);
-    board = b; boardAt = Date.now(); netFails = 0;
+    board = b; boardAt = Date.now(); netFails = 0; boardGen++;
   }
   async function getName() {
     if (myName && Date.now() - nameAt < NAME_REFRESH) return myName;
@@ -151,6 +151,7 @@
         if (m && m.c === c && Date.now() - m.t < 3000) { minePx.delete(i); continue; }   // the echo of my own pixel: I know who painted it
         owner.delete(i); dirty.add(i);
         if (want.has(i)) {
+          touch(x, y);
           if (watchSet.has(i)) hot.push(i);      // ask who painted this one before the rest
           if (want.get(i) !== c) urgent = true;  // a pixel of an art we look after just went wrong
         }
@@ -295,6 +296,10 @@
   // want: board index -> the colour it should have (your art + everything protected); watchSet: the ones whose painter matters
   let want = new Map(), watchSet = new Set(), watchAll = [], urgent = false;
   const wantSrc = { heavy: null, o: '' }, hot = [], asking = new Set(), minePx = new Map();
+  // protected arts that are intact are remembered as intact until something inside them changes
+  const gCache = new WeakMap(), gDirty = new Set(); let guardList = [], boardGen = 0, whoGen = 0, unkAt = 0, unkN = 0;
+  const touch = (x, y) => { for (const g of guardList) if (x >= g.origin.x && y >= g.origin.y && x < g.origin.x + g.art.w && y < g.origin.y + g.art.h) gDirty.add(g); };
+  const scan = { list: null, a: 0, b: 0, at: 0 };   // where the who-painted scan is
   const owner = new Map(), dirty = new Set();   // board index -> who painted it ('' = nobody)
   // asks the site, one pixel at a time, who painted the pixels of your arts
   // Pixels that just changed are asked first (that is where a griefer is). The second asker (id 1) only works
@@ -303,11 +308,12 @@
     for (;;) {
       if (!alive()) return;
       let i = -1;
-      if (approved && board && wantOn && (id === 0 || role === 'replace')) {
+      if (approved && board && wantOn && (id < 2 || role === 'replace')) {   // two askers; a replacer gets a third
         const ok = (k) => board[k] !== WHITE && !owner.has(k) && !asking.has(k);
         while (hot.length && i < 0) { const k = hot.pop(); if (watchSet.has(k) && ok(k)) i = k; }
-        if (i < 0) for (const k of watch) if (board[k] !== want.get(k) && ok(k)) { i = k; break; }
-        if (i < 0) for (const k of watch) if (ok(k)) { i = k; break; }
+        if (scan.list !== watch || Date.now() - scan.at > 60000) { scan.list = watch; scan.a = scan.b = 0; scan.at = Date.now(); }   // (start over now and then, for anything missed)
+        while (i < 0 && scan.a < watch.length) { const k = watch[scan.a++]; if (board[k] !== want.get(k) && ok(k)) i = k; }   // wrong colours first
+        while (i < 0 && scan.b < watch.length) { const k = watch[scan.b++]; if (ok(k)) i = k; }
       }
       if (i < 0) { await sleep(id ? 1000 : 400); continue; }
       asking.add(i);
@@ -318,9 +324,9 @@
         if (!dirty.has(i)) {   // (repainted meanwhile: ask again)
           const nm = String(j.name || '').toLowerCase();
           owner.set(i, nm);
-          if (nm && approved && !approved.has(nm)) wake();   // found one to replace: do it now
+          if (nm && approved && !approved.has(nm)) { whoGen++; wake(); }   // found one to replace: do it now
         }
-        await sleep(role === 'replace' ? WHO_GAP_FAST : WHO_GAP);
+        await sleep(WHO_GAP_FAST);
       } catch { asking.delete(i); await sleep(5000); }
     }
   }
@@ -412,6 +418,7 @@
   // ---------- the loop ----------
   // The art and the protected areas can be megabytes; reading them from storage for every pixel made everything
   // slow. They are kept here and re-read only when they change (plus a slow safety re-read).
+  let heavySig = '';
   let orderMoved = false;   // the saved paint order was switched once to the new default (outline to inside)
   let heavy = null, heavyAt = 0, heavyDirty = true, lastRepair = false, wasClosed = false;
   const HEAVY_REFRESH = 15000;
@@ -430,7 +437,9 @@
         if (!orderMoved) { orderMoved = true; const o = await chrome.storage.local.get('orderV2'); if (!o.orderV2) { cfg.order = 'inward'; await chrome.storage.local.set({ order: 'inward', orderV2: 1 }); } }
         if (!heavy || heavyDirty || Date.now() - heavyAt > HEAVY_REFRESH) {
           heavyDirty = false;
-          heavy = await chrome.storage.local.get(['art', 'guard']); heavyAt = Date.now();
+          const fresh = await chrome.storage.local.get(['art', 'guard']); heavyAt = Date.now();
+          const sig = (fresh.art ? artKey(fresh.art, { x: 0, y: 0 }) : '') + '|' + (Array.isArray(fresh.guard) ? fresh.guard.map((g) => g.key).join(';') : '');
+          if (!heavy || sig !== heavySig) { heavy = fresh; heavySig = sig; }   // unchanged: keep the objects we already worked out
         }
         if (heavy.art) cfg.art = heavy.art;
         if (heavy.guard) cfg.guard = heavy.guard;
@@ -487,11 +496,17 @@
         }
         const guarded = guards.some((g) => g.key === curKey);
         let repair = null, repairLeft = 0, otherJobs = 0;
+        guardList = guards;
+        const apSig = [boardGen, role, approved ? [...approved].join(',') : '-', (cfg.team && cfg.team.slot) || 1].join('|');
         for (const g of guards) {
           if (g.key === curKey || overlaps(g, cfg.art, cfg.origin)) continue;   // the current art handles its own spot
+          const gs = apSig + '|' + (g.snap ? 0 : whoGen), hit = gCache.get(g);
+          if (hit && hit === gs && !gDirty.has(g)) continue;   // intact at the last look and nothing in it changed since
+          gDirty.delete(g);
           const keepApproved = approved; if (g.snap) approved = null;   // a selected area keeps whoever painted it
           const gp = pickNext(g.art, g.origin, false, NONE, 'outline', { size: g.size || 1, slot: (cfg.team && cfg.team.slot) || 1 }, true);
           approved = keepApproved;
+          if (!gp.todo && !gp.other) gCache.set(g, gs); else gCache.delete(g);
           repairLeft += gp.todo; otherJobs += gp.other;
           if (!repair && gp.next) repair = gp.next;
         }
@@ -509,7 +524,8 @@
         const nGuard = guards.length;
         if (role !== 'all') progress.job = JOBS[role] + (otherJobs ? ' · ' + otherJobs + ' px left for the other jobs' : '');
         if (approved) {
-          let unknown = 0; for (const k of watch) if (board[k] !== WHITE && !owner.has(k)) unknown++;
+          if (Date.now() - unkAt > 4000) { unkAt = Date.now(); unkN = 0; for (const k of watch) if (board[k] !== WHITE && !owner.has(k)) unkN++; }   // counted every few seconds, not for every pixel
+          const unknown = unkN;
           progress.who = (unknown ? `Checking who painted each pixel: ${unknown} left` : p.retake ? `Replacing ${p.retake} px painted by: ` + [...p.bad].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([nm, k]) => `${nm} (${k})`).join(', ') + '. Add a name to the approved list to keep its pixels.' : 'All pixels are by approved painters');
         }
         if (nGuard) progress.guard = `Protecting ${nGuard} finished art${nGuard > 1 ? 's' : ''}` + (repairLeft ? `, ${repairLeft} px to repair` : '');
@@ -569,7 +585,7 @@
         if (j.ok) {
           fails = 0; sessionPainted++; lastRepair = isRepair;
           if (board) board[i] = c;
-          owner.set(i, name.toLowerCase()); minePx.set(i, { c, t: Date.now() });
+          owner.set(i, name.toLowerCase()); minePx.set(i, { c, t: Date.now() }); touch(x, y);
           if (minePx.size > 500) minePx.clear();
           if (!isRepair) placed.add(i);
           pool.charges = Math.max(0, pool.charges - 1);   // spent one (the answer below corrects it)
@@ -800,7 +816,7 @@
 
   // a tab waiting for the lock says so, instead of looking dead
   status({ state: 'waiting', msg: 'Bot loaded in a site tab, starting…' });
-  const run = () => { whoLoop(0); whoLoop(1); return loop(); };
+  const run = () => { whoLoop(0); whoLoop(1); whoLoop(2); return loop(); };
   if (navigator.locks) navigator.locks.request('odedsvr-artbot', run);
   else run();
 })();
