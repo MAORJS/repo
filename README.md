@@ -40,7 +40,7 @@ When the bot sees your art complete, it saves the picture and its spot in a list
 In a team there is no shared server: each friend's bot adds the art to its own list when it sees it finished. The friend who owns a griefed pixel repairs it at once; the others wait 8 seconds first, so the team doesn't spend several pixels on the same one.
 
 ## Approved painters
-With **Only approved painters** on (in **Run**), the bot asks the site who painted each pixel inside your art and your protected arts. A pixel painted by anyone who is not on the list is repainted by you, even if its colour is already right. Your own account is always approved. Everyone in a team must have every teammate on their list, otherwise the bots keep repainting each other's pixels. Checking takes about 4 pixels per second.
+With **Only approved painters** on (in **Run**), the bot asks the site who painted each pixel inside your art and your protected arts. A pixel painted by anyone who is not on the list is repainted by you, even if its colour is already right. Your own account is always approved. In a team you don't have to list your friends: anyone who paints your art in the right colour is approved automatically after a few pixels (the team code also shares the names). This stops the bots repainting each other's pixels. Checking takes about 4 pixels per second.
 
 ## Lost connection
 If several requests to the site fail in a row, the bot refreshes the page (at most once every 2 minutes). If the tab can't load at all or was put to sleep, the extension reloads it once the site answers again and the canvas is open.

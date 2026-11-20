@@ -242,7 +242,7 @@
     }
     return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad };
   }
-  const wrongSince = new Map(), HELP_DELAY = 8000, HELP_IDLE = 20000;
+  const wrongSince = new Map(), HELP_DELAY = 8000, HELP_IDLE = 20000, TEAM_LEARN = 3;
   let teamState = null;   // per share: finished pixels at the last look, and when it last grew
   // approved painters: null = feature off, else the lower-case names whose pixels are left alone
   let approved = null, watch = [];
@@ -261,6 +261,23 @@
         await sleep(WHO_GAP);
       } catch { await sleep(5000); }
     }
+  }
+  // Team without hand-syncing lists: anyone who has painted TEAM_LEARN+ pixels of the shared art in the
+  // RIGHT colour is a teammate (a griefer doesn't fill in your art correctly), so approve them automatically.
+  // It only ever ADDS names, and only names already painting your art correctly, so it can't cause extra repainting.
+  function learnTeammates(appr, a, o, size) {
+    if (!appr || size < 2 || !board) return [];
+    const tally = new Map();
+    for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
+      const c = a.data[y * a.w + x]; if (c < 0) continue;
+      const bx = o.x + x, by = o.y + y; if (bx < 0 || by < 0 || bx >= W || by >= H) continue;
+      const i = by * W + bx; if (board[i] !== c) continue;             // only correct pixels
+      const w = owner.get(i); if (!w || appr.has(w)) continue;         // unknown yet, or already approved
+      tally.set(w, (tally.get(w) || 0) + 1);
+    }
+    const learned = [];
+    for (const [w, k] of tally) if (k >= TEAM_LEARN) { appr.add(w); learned.push(w); }
+    return learned;
   }
   const footprint = (list, a, o) => {
     for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
@@ -309,6 +326,7 @@
           for (const g of guards) footprint(list, g.art, g.origin);
           watch = list;
         }
+        const learned = approved ? learnTeammates(approved, cfg.art, cfg.origin, cfg.team && cfg.team.size || 1) : [];
         const guarded = guards.some((g) => g.key === curKey);
         let repair = null, repairLeft = 0;
         for (const g of guards) {
@@ -326,7 +344,7 @@
         const nGuard = guards.length;
         if (approved) {
           let unknown = 0; for (const k of watch) if (board[k] !== WHITE && !owner.has(k)) unknown++;
-          progress.who = unknown ? `Checking who painted each pixel: ${unknown} left` : p.retake ? `Replacing ${p.retake} px painted by: ` + [...p.bad].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([nm, k]) => `${nm} (${k})`).join(', ') + '. If one of them is a teammate, add the name to the approved list.' : 'All pixels are by approved painters';
+          progress.who = (unknown ? `Checking who painted each pixel: ${unknown} left` : p.retake ? `Replacing ${p.retake} px painted by: ` + [...p.bad].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([nm, k]) => `${nm} (${k})`).join(', ') + '. A real teammate is approved by itself once it has painted a few pixels right.' : 'All pixels are by approved painters') + (learned.length ? ` · ${learned.length} teammate${learned.length > 1 ? 's' : ''} auto-approved` : '');
         }
         if (nGuard) progress.guard = `Protecting ${nGuard} finished art${nGuard > 1 ? 's' : ''}` + (repairLeft ? `, ${repairLeft} px to repair` : '');
         if (!p.total) { status({ state: 'error', msg: 'Your spot is outside the board. Change X/Y.' }); await sleep(IDLE, true); continue; }

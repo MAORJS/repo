@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Canvas Art Bot (odedsvrmonopoly)",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "Watches the odedsvrmonopoly.app canvas and paints your own pixel art in a spot you choose, one pixel every 5 seconds.",
   "permissions": ["storage", "alarms", "notifications", "tabs", "power"],
   "host_permissions": ["https://odedsvrmonopoly.app/*"],
