@@ -179,6 +179,14 @@ $('autoOpen').onchange = () => chrome.storage.local.set({ autoOpen: $('autoOpen'
 $('overlay').onchange = () => chrome.storage.local.set({ overlay: $('overlay').checked });
 $('overlayBoard').onchange = () => chrome.storage.local.set({ overlayBoard: $('overlayBoard').checked });
 $('order').onchange = () => chrome.storage.local.set({ order: $('order').value });
+const ROLE_INFO = {
+  all: 'Does everything: paints the art, repairs protected arts, replaces non-approved painters.',
+  draw: 'Only paints the art, and keeps it painted. Never spends a pixel on other protected arts or on checking painters.',
+  replace: 'Only repaints pixels that someone not on the approved list painted. Paints nothing else.',
+  defend: 'Only repairs finished or protected arts when someone paints over them. Does not paint an unfinished art.',
+};
+function drawRole() { $('roleInfo').textContent = ROLE_INFO[$('role').value] || ''; }
+$('role').onchange = () => { chrome.storage.local.set({ role: $('role').value }); drawRole(); };
 $('openSite').onclick = async () => {
   const tabs = await chrome.tabs.query({ url: BASE + '/*' });
   if (tabs.length) { chrome.tabs.update(tabs[0].id, { active: true }); chrome.windows.update(tabs[0].windowId, { focused: true }); }
@@ -374,7 +382,7 @@ function showStatus(s) {
   $('sBar').hidden = !s.total;
   if (s.total) $('sBarFill').style.width = Math.min(100, s.done / s.total * 100) + '%';
   const pool = s.pool ? `<br>🟪 ${s.pool}` : '';
-  const team = (s.team ? `<br>👥 ${s.team}` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '') + (s.who ? `<br>🔎 ${s.who}` : '');
+  const team = (s.job ? `<br>🎯 Job: ${s.job}` : '') + (s.team ? `<br>👥 ${s.team}` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '') + (s.who ? `<br>🔎 ${s.who}` : '');
   const extra = team + (s.state === 'painting' && s.eta ? `<br>Time left: ${s.eta}` : '') + (s.session ? `<br><span class="muted">${s.session} painted since this tab opened</span>` : '');
   $('statusCard').className = 'card ' + (s.state || '');
   if (age > 30) reviveTab();
@@ -385,7 +393,8 @@ function showStatus(s) {
 chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); if (ch.me) drawMe(ch.me.newValue); if (ch.nightStats || ch.nightLog || ch.night) drawNight(); });
 
 (async () => {
-  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'me', 'overlay', 'overlayBoard']);
+  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'me', 'overlay', 'overlayBoard', 'role']);
+  $('role').value = ROLE_INFO[s.role] ? s.role : 'all'; drawRole();
   drawMe(s.me);
   drawNight();
   $('approvedOn').checked = s.approvedOn !== false;

@@ -186,7 +186,7 @@
   // member starts at a different place in it (member 1 at the end, the others spread out before it), so
   // helpers don't pick the same pixel as each other or as the owner, who works from the start.
   function pickNext(art, origin, protect, placed, order, team, guard, ts) {
-    let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0, retake = 0, right = 0;
+    let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0, retake = 0, right = 0, other = 0;
     const bad = new Map();   // non-approved painters found in this art -> how many pixels
     const rest = [];   // pixels of other members' shares that are still to paint
     const size = team && team.size > 1 ? team.size : 1, slot = size > 1 ? Math.min(size, Math.max(1, team.slot || 1)) - 1 : 0;
@@ -210,6 +210,9 @@
       if (cur === c) right++;   // right colour on the board, whoever painted it: this is the % everyone sees
       if (cur === c && !foreign) { done++; if (guard) wrongSince.delete(i); continue; }
       if (!foreign && protect && cur !== WHITE && !placed.has(i)) { blocked++; continue; }
+      // jobs: every pixel that needs paint is one kind of work, and a member with a job does only that kind
+      const job = foreign ? 'replace' : guard === true ? 'defend' : 'draw';
+      if (role !== 'all' && role !== job && !(guard === 'own' && !foreign && (role === 'draw' || role === 'defend'))) { other++; continue; }
       n++; if (foreign) { retake++; bad.set(who, (bad.get(who) || 0) + 1); }
       let score;
       if (order === 'random') score = Math.random();
@@ -243,9 +246,13 @@
       rest.sort((a, b) => a.score - b.score);
       next = rest[rest.length - 1 - Math.floor(slot * rest.length / size)].p;
     }
-    return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad };
+    return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad, other };
   }
   const wrongSince = new Map(), HELP_DELAY = 8000, HELP_IDLE = 20000, TEAM_LEARN = 3;
+  // your job: 'all' (default), 'draw' (only paint the art), 'replace' (only repaint pixels by painters who are
+  // not approved), 'defend' (only repair protected arts that were painted over)
+  let role = 'all';
+  const JOBS = { draw: 'Drawing only', replace: 'Replacing non-approved painters only', defend: 'Defending protected arts only' };
   let teamState = null;   // per share: finished pixels at the last look, and when it last grew
   // approved painters: null = feature off, else the lower-case names whose pixels are left alone
   let approved = null, watch = [];
@@ -382,7 +389,8 @@
     for (;;) {
       if (!alive()) { liveStop(); return; }
       try {
-        const cfg = await chrome.storage.local.get(['enabled', 'origin', 'protect', 'placed', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats', 'overlay']);
+        const cfg = await chrome.storage.local.get(['enabled', 'origin', 'protect', 'placed', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats', 'overlay', 'role']);
+        role = JOBS[cfg.role] ? cfg.role : 'all';
         if (!heavy || heavyDirty || Date.now() - heavyAt > HEAVY_REFRESH) {
           heavyDirty = false;
           heavy = await chrome.storage.local.get(['art', 'guard']); heavyAt = Date.now();
@@ -410,7 +418,8 @@
         // protected arts first: repair what was painted over
         const guards = Array.isArray(cfg.guard) ? cfg.guard : [], curKey = keyOf(cfg.art, cfg.origin);
         // approved painters: your own account plus the names in the popup
-        if (cfg.approvedOn === false) { approved = null; watch = []; }
+        // drawers and defenders don't need to know who painted what; a replacer always does
+        if (role === 'draw' || role === 'defend' || (cfg.approvedOn === false && role !== 'replace')) { approved = null; watch = []; }
         else {
           const me = (await getName()).toLowerCase();
           approved = new Set((Array.isArray(cfg.approved) ? cfg.approved : DEFAULT_APPROVED).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
@@ -422,29 +431,31 @@
         }
         const learned = approved ? learnTeammates(approved, cfg.art, cfg.origin, cfg.team && cfg.team.size || 1) : [];
         const guarded = guards.some((g) => g.key === curKey);
-        let repair = null, repairLeft = 0;
+        let repair = null, repairLeft = 0, otherJobs = 0;
         for (const g of guards) {
           if (g.key === curKey || overlaps(g, cfg.art, cfg.origin)) continue;   // the current art handles its own spot
           const keepApproved = approved; if (g.snap) approved = null;   // a selected area keeps whoever painted it
           const gp = pickNext(g.art, g.origin, false, NONE, 'rows', { size: g.size || 1, slot: (cfg.team && cfg.team.slot) || 1 }, true);
           approved = keepApproved;
-          repairLeft += gp.todo;
+          repairLeft += gp.todo; otherJobs += gp.other;
           if (!repair && gp.next) repair = gp.next;
         }
         const tsKey = curKey + '|' + JSON.stringify(cfg.team || 0) + '|' + cfg.order;
         if (!teamState || teamState.key !== tsKey) teamState = { key: tsKey, t0: Date.now(), head: [], seen: [] };
-        const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false && !guarded, placed, cfg.order, cfg.team, guarded, teamState);
+        const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false && !guarded, placed, cfg.order, cfg.team, guarded ? 'own' : false, teamState);
+        otherJobs += p.other;
         // "done" shown to you counts every pixel with the right colour, so all teammates see the same number
         const progress = { total: p.total, done: p.right, blocked: p.blocked, session: sessionPainted };
         if (p.size > 1) progress.team = p.mine ? `${p.mine} of your share left` : p.waiting && !p.next ? `Your share is done. Teammates are painting theirs (${p.todo} left); you step in if one stops for 20 s` : p.todo ? `Your share is done, helping a teammate who stopped (${p.todo} left)` : 'All done';
         const nGuard = guards.length;
+        if (role !== 'all') progress.job = JOBS[role] + (otherJobs ? ' · ' + otherJobs + ' px left for the other jobs' : '');
         if (approved) {
           let unknown = 0; for (const k of watch) if (board[k] !== WHITE && !owner.has(k)) unknown++;
           progress.who = (unknown ? `Checking who painted each pixel: ${unknown} left` : p.retake ? `Replacing ${p.retake} px painted by: ` + [...p.bad].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([nm, k]) => `${nm} (${k})`).join(', ') + '. A real teammate is approved by itself once it has painted a few pixels right.' : 'All pixels are by approved painters') + (learned.length ? ` · ${learned.length} teammate${learned.length > 1 ? 's' : ''} auto-approved` : '');
         }
         if (nGuard) progress.guard = `Protecting ${nGuard} finished art${nGuard > 1 ? 's' : ''}` + (repairLeft ? `, ${repairLeft} px to repair` : '');
         if (!p.total && hasArt) { status({ state: 'error', msg: 'Your spot is outside the board. Change X/Y.' }); await sleep(IDLE, true); continue; }
-        if (!p.next && !repair && !p.todo && !p.blocked && !guarded && hasArt && cfg.autoGuard !== false) {
+        if (!p.next && !repair && !p.todo && !p.other && !p.blocked && !guarded && hasArt && cfg.autoGuard !== false) {
           // just seen complete: remember it so it gets repaired from now on
           const entry = { key: curKey, art: cfg.art, origin: cfg.origin, size: cfg.team && cfg.team.size > 1 ? cfg.team.size : 1, t: Date.now() };
           await chrome.storage.local.set({ guard: [...guards, entry].slice(-MAX_GUARD) });
@@ -462,9 +473,9 @@
         if (!p.next && !repair) {
           status({
             state: 'done', ...progress, pool: poolText(),
-            msg: p.blocked ? `Finished what it can: ${p.blocked} px are covered by others (skipped)` : !hasArt ? `Protecting ${nGuard} area${nGuard > 1 ? 's' : ''} ✓ Watching and repairing if someone paints over.` : 'Art complete ✓ Watching and repairing if someone paints over it.',
+            msg: role !== 'all' && otherJobs ? 'Nothing for your job right now ✓ Watching.' : p.blocked ? `Finished what it can: ${p.blocked} px are covered by others (skipped)` : !hasArt ? `Protecting ${nGuard} area${nGuard > 1 ? 's' : ''} ✓ Watching and repairing if someone paints over.` : 'Art complete ✓ Watching and repairing if someone paints over it.',
           });
-          await sleep(nGuard || approved ? 3000 : IDLE, true); continue;
+          await sleep(nGuard || approved || role !== 'all' ? 3000 : IDLE, true); continue;
         }
 
         const name = await getName();
@@ -539,7 +550,7 @@
   }
 
   // start/stop and new settings take effect at once instead of at the next check
-  try { chrome.storage.onChanged.addListener((ch) => { if (ch.art || ch.guard) heavyDirty = true; if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard || ch.approved || ch.approvedOn || ch.overlay) wake(); }); } catch { /* reloaded */ }
+  try { chrome.storage.onChanged.addListener((ch) => { if (ch.art || ch.guard) heavyDirty = true; if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard || ch.approved || ch.approvedOn || ch.overlay || ch.role) wake(); }); } catch { /* reloaded */ }
 
   // ========= board-aligned ghost: draws the art straight onto the site's board, glued to its pan and zoom =========
   // The board is rendered 1:1 into a <canvas id="cv"> (canvas pixel = board pixel) and panned/zoomed with a CSS
