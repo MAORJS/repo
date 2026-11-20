@@ -32,7 +32,7 @@ For friends who want to paint one art together, each with their own account and 
 2. Everyone else pastes that code and clicks **Load code**. This gives them the same art, spot and team size.
 3. Each friend picks a different **I am number**, then clicks Start.
 
-The art is split into shares with the same number of pixels. Each bot paints only its own share while the others are painting theirs, so everyone paints the same amount. If a friend stops for 20 seconds (offline or stuck), the bots that are finished step in and split that share between them, so the art still gets done. Everyone must use the same version of the extension and the same paint order (the team code sets it; "Random" counts as "Top to bottom" in a team).
+The art is cut into equal solid blocks, top to bottom, one per friend. Each bot paints its own block first, in the paint order (default: outline first, then ring by ring to the inside). A friend whose block is finished helps at once with the block that has the most left, working from the other end so they meet in the middle. Everyone needs the same version of the extension.
 
 ## Jobs (optional)
 In the **Team** section each person picks **My job**: *Everything* (default), *Drawer* (only paints the art), *Replacer* (only repaints pixels painted by someone not on the approved list) or *Defender* (repairs anything painted over, also inside an unfinished art) or *Protector* (only repairs finished arts and the Protected list). Each friend still uses their own account. A share that belongs to a Replacer or Defender is painted by the others after about 20 s, so it is quicker to count only the drawers in "Friends painting".
