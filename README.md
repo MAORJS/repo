@@ -39,6 +39,9 @@ When the bot sees your art complete, it saves the picture and its spot in a list
 
 In a team there is no shared server: each friend's bot adds the art to its own list when it sees it finished. The friend who owns a griefed pixel repairs it at once; the others wait 8 seconds first, so the team doesn't spend several pixels on the same one.
 
+## Protect a painting that is already there
+In **Protected arts**, click **Select on the board**, then click one corner of the painting on the canvas and the opposite corner (you can still move and zoom between clicks). Or type the two corners in the popup and click **Protect**. The pixels inside are saved as they are now; while the bot is on and the canvas is open, any of them that changes is repainted. Empty pixels inside the area are not protected, the approved-painters rule is not applied there, and you don't need an art of your own for this.
+
 ## Approved painters
 With **Only approved painters** on (in **Run**), the bot asks the site who painted each pixel inside your art and your protected arts. A pixel painted by anyone who is not on the list is repainted by you, even if its colour is already right. Your own account is always approved. In a team you don't have to list your friends: anyone who paints your art in the right colour is approved automatically after a few pixels (the team code also shares the names). This stops the bots repainting each other's pixels. Checking takes about 4 pixels per second.
 

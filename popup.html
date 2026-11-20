@@ -149,7 +149,21 @@
 
   <details id="secGuard">
     <summary>Protected arts <span class="hint" id="guardHint"></span></summary>
-    <div class="body"><div id="guardList" class="muted">None yet. An art is added here by itself when it is finished.</div></div>
+    <div class="body">
+      <div id="guardList" class="muted">None yet. An art is added here by itself when it is finished.</div>
+      <div style="border-top:1px solid var(--line);margin:10px 0 8px"></div>
+      <div style="font-weight:600;color:#b9adf0">Protect a painting that is already on the board</div>
+      <button id="pickArea" style="margin-top:6px">Select on the board (click 2 corners)</button>
+      <div class="muted" style="margin:8px 0 4px">or type the two corners:</div>
+      <div class="row">
+        <span class="muted">from</span><input type="number" id="gx1" placeholder="X" min="0"><input type="number" id="gy1" placeholder="Y" min="0">
+      </div>
+      <div class="row" style="margin-top:4px">
+        <span class="muted">to&nbsp;&nbsp;&nbsp;&nbsp;</span><input type="number" id="gx2" placeholder="X" min="0"><input type="number" id="gy2" placeholder="Y" min="0">
+        <button class="sec" id="guardArea">Protect</button>
+      </div>
+      <div id="guardInfo" class="muted" style="margin-top:6px">What is painted inside is saved as it is now, and repainted if someone changes it. Empty pixels are not protected.</div>
+    </div>
   </details>
 
   <script src="presets.js"></script>

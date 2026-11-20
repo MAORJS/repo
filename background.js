@@ -45,16 +45,17 @@ async function poll() {
   try { meta = await (await fetch(BASE + '/api/canvas/meta', { cache: 'no-store' })).json(); }
   catch { return; }
   const open = isOpen(meta);
-  const { wasOpen, enabled, autoOpen = true, art, status, autoTab, reloadAt = 0, night } = await chrome.storage.local.get(['wasOpen', 'enabled', 'autoOpen', 'art', 'status', 'autoTab', 'reloadAt', 'night']);
+  const { wasOpen, enabled, autoOpen = true, art, status, autoTab, reloadAt = 0, night } = await chrome.storage.local.get(['wasOpen', 'enabled', 'autoOpen', 'art', 'status', 'autoTab', 'reloadAt', 'night', 'guard']);
+  const guard = (await chrome.storage.local.get('guard')).guard, work = art || (Array.isArray(guard) && guard.length > 0);   // something to paint or protect
   if (!open && wasOpen) nightLog('The canvas closed');
   badge(open, status);
 
   if (open && !wasOpen) {
     const mins = meta.paused == null ? Math.max(1, Math.round((meta.openUntil - meta.t) / 60000)) : 0;
     note('open', 'The canvas is open!' + (mins ? ` (${mins} min)` : ''),
-      (enabled && art ? 'Painting your art now.' : 'Turn the bot on in the popup to paint.') + (meta.theme ? ` Theme: ${meta.theme}` : ''));
+      (enabled && work ? 'Painting your art now.' : 'Turn the bot on in the popup to paint.') + (meta.theme ? ` Theme: ${meta.theme}` : ''));
   }
-  if (open && enabled && art && (autoOpen || night)) {
+  if (open && enabled && work && (autoOpen || night)) {
     const tabs = await chrome.tabs.query({ url: BASE + '/*' });
     if (!tabs.length) {
       // a background tab of our own; told not to be put to sleep by the browser's memory saver
@@ -66,7 +67,7 @@ async function poll() {
   }
   // The painter reports every few seconds. If the site answers (we just got its status) but the painter has
   // been silent for 45 s, its tab lost the connection, shows an error page, or was put to sleep: refresh it.
-  if (enabled && art && (!status || Date.now() - status.t > 45000) && Date.now() - reloadAt > (open ? 60000 : 300000)) {
+  if (enabled && work && (!status || Date.now() - status.t > 45000) && Date.now() - reloadAt > (open ? 60000 : 300000)) {
     const tabs = await chrome.tabs.query({ url: BASE + '/*' });
     if (tabs.length) {
       await chrome.storage.local.set({ reloadAt: Date.now() });

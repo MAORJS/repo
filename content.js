@@ -375,11 +375,13 @@
       try {
         const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats', 'overlay']);
         wantOn = !!cfg.enabled; ovCfg = cfg; renderOverlay(cfg);
-        if (!cfg.enabled || !cfg.art || !cfg.origin) {
+        const hasArt = !!(cfg.art && cfg.origin), hasGuard = Array.isArray(cfg.guard) && cfg.guard.length > 0;
+        if (!cfg.enabled || (!hasArt && !hasGuard)) {
           liveStop();
           status({ state: 'off', msg: cfg.enabled ? 'No art or spot set yet' : 'Bot is off' });
           await sleep(IDLE, true); continue;
         }
+        if (!hasArt) { cfg.art = { w: 1, h: 1, data: [-1] }; cfg.origin = { x: 0, y: 0 }; ovCfg = null; }   // nothing of your own to paint: only protect
         liveStart();
 
         if (!meta || Date.now() - metaAt > META_REFRESH) await getMeta();
@@ -400,7 +402,7 @@
           if (me) approved.add(me);
           const list = [];
           footprint(list, cfg.art, cfg.origin);
-          for (const g of guards) footprint(list, g.art, g.origin);
+          for (const g of guards) if (!g.snap) footprint(list, g.art, g.origin);
           watch = list;
         }
         const learned = approved ? learnTeammates(approved, cfg.art, cfg.origin, cfg.team && cfg.team.size || 1) : [];
@@ -408,7 +410,9 @@
         let repair = null, repairLeft = 0;
         for (const g of guards) {
           if (g.key === curKey || overlaps(g, cfg.art, cfg.origin)) continue;   // the current art handles its own spot
+          const keepApproved = approved; if (g.snap) approved = null;   // a selected area keeps whoever painted it
           const gp = pickNext(g.art, g.origin, false, NONE, 'rows', { size: g.size || 1, slot: (cfg.team && cfg.team.slot) || 1 }, true);
+          approved = keepApproved;
           repairLeft += gp.todo;
           if (!repair && gp.next) repair = gp.next;
         }
@@ -424,8 +428,8 @@
           progress.who = (unknown ? `Checking who painted each pixel: ${unknown} left` : p.retake ? `Replacing ${p.retake} px painted by: ` + [...p.bad].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([nm, k]) => `${nm} (${k})`).join(', ') + '. A real teammate is approved by itself once it has painted a few pixels right.' : 'All pixels are by approved painters') + (learned.length ? ` · ${learned.length} teammate${learned.length > 1 ? 's' : ''} auto-approved` : '');
         }
         if (nGuard) progress.guard = `Protecting ${nGuard} finished art${nGuard > 1 ? 's' : ''}` + (repairLeft ? `, ${repairLeft} px to repair` : '');
-        if (!p.total) { status({ state: 'error', msg: 'Your spot is outside the board. Change X/Y.' }); await sleep(IDLE, true); continue; }
-        if (!p.next && !repair && !p.todo && !p.blocked && !guarded && cfg.autoGuard !== false) {
+        if (!p.total && hasArt) { status({ state: 'error', msg: 'Your spot is outside the board. Change X/Y.' }); await sleep(IDLE, true); continue; }
+        if (!p.next && !repair && !p.todo && !p.blocked && !guarded && hasArt && cfg.autoGuard !== false) {
           // just seen complete: remember it so it gets repaired from now on
           const entry = { key: curKey, art: cfg.art, origin: cfg.origin, size: cfg.team && cfg.team.size > 1 ? cfg.team.size : 1, t: Date.now() };
           await chrome.storage.local.set({ guard: [...guards, entry].slice(-MAX_GUARD) });
@@ -442,7 +446,7 @@
         if (!p.next && !repair) {
           status({
             state: 'done', ...progress, pool: poolText(),
-            msg: p.blocked ? `Finished what it can: ${p.blocked} px are covered by others (skipped)` : 'Art complete ✓ Watching and repairing if someone paints over it.',
+            msg: p.blocked ? `Finished what it can: ${p.blocked} px are covered by others (skipped)` : !hasArt ? `Protecting ${nGuard} area${nGuard > 1 ? 's' : ''} ✓ Watching and repairing if someone paints over.` : 'Art complete ✓ Watching and repairing if someone paints over it.',
           });
           await sleep(nGuard || approved ? 3000 : IDLE, true); continue;
         }
@@ -597,6 +601,90 @@
     tick();
   }
   boardGhost();
+
+  // ========= protect an area: click two corners on the board, and what is painted there now gets protected =========
+  // The popup switches this on (storage key "pick" = the time it was pressed). You click one corner of a painting,
+  // then the opposite corner; the pixels inside are copied from the board as they are now and added to the
+  // protected arts, so the bot repaints them if someone changes them. Empty (white) pixels are not protected.
+  const AREA_MAX = 60000;   // pixels in one selected area
+  async function protectArea(x, y, w, h) {
+    if (w * h > AREA_MAX) return `That is ${w}×${h}, too big. Select at most ${AREA_MAX} pixels at a time.`;
+    const m = await (await fetch('/api/canvas/meta', { cache: 'no-store' })).json();
+    const b = new Uint8Array(await (await fetch('/api/canvas', { cache: 'no-store' })).arrayBuffer());
+    if (b.length !== m.w * m.h) throw new Error('board size');
+    const white = m.palette.length - 1, data = [];
+    let n = 0;
+    for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) {
+      const c = b[(y + yy) * m.w + x + xx];
+      if (c === white || c === undefined) data.push(-1); else { data.push(c); n++; }
+    }
+    if (!n) return 'Nothing is painted in that area.';
+    const art = { w, h, data }, origin = { x, y }, key = artKey(art, origin);
+    const { guard = [] } = await chrome.storage.local.get('guard');
+    if (guard.some((g) => g.key === key)) return 'That area is already protected ✓';
+    await chrome.storage.local.set({ guard: [...guard, { key, art, origin, size: 1, snap: true, t: Date.now() }].slice(-MAX_GUARD) });
+    return `Protected ${w}×${h} at (${x}, ${y}): ${n} pixels ✓ Turn the bot on to keep it repaired.`;
+  }
+  function areaPicker() {
+    if (typeof document === 'undefined') return;   // the test harness has no page
+    let on = false, first = null, bar = null, doc = null, down = null, hideT = 0;
+    const findCv = () => {
+      const c = document.getElementById('cv'); if (c) return c;
+      for (const f of document.querySelectorAll('iframe')) { try { const d = f.contentDocument, x = d && d.getElementById('cv'); if (x) return x; } catch { /* cross-origin */ } }
+      return null;
+    };
+    const say = (t) => {
+      clearTimeout(hideT);
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:2147483647;direction:ltr;max-width:90vw;background:#6a5cff;color:#fff;font:600 13px system-ui,sans-serif;padding:8px 14px;border-radius:8px;box-shadow:0 6px 20px #0008;cursor:pointer';
+        bar.title = 'Click to cancel';
+        bar.onclick = () => stop(true);
+        (document.body || document.documentElement).appendChild(bar);
+      }
+      bar.textContent = t;
+    };
+    const hide = () => { clearTimeout(hideT); if (bar) { bar.remove(); bar = null; } };
+    function stop(cancel) {
+      on = false; first = null;
+      if (doc) { doc.removeEventListener('pointerdown', onDown, true); doc.removeEventListener('click', onClick, true); }
+      doc = null;
+      try { chrome.storage.local.set({ pick: 0 }); } catch { /* reloaded */ }
+      if (cancel) hide();
+    }
+    const onDown = (e) => { down = { x: e.clientX, y: e.clientY }; };
+    async function onClick(e) {
+      if (!on) return;
+      const cv = findCv(); if (!cv) return;
+      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;   // that was a drag (moving the board), not a click
+      if (!e.target || !e.target.closest || !e.target.closest('#stage')) return;
+      const r = cv.getBoundingClientRect();
+      const px = Math.floor((e.clientX - r.left) / r.width * cv.width), py = Math.floor((e.clientY - r.top) / r.height * cv.height);
+      if (px < 0 || py < 0 || px >= cv.width || py >= cv.height) return;
+      if (!first) { first = { x: px, y: py }; say(`First corner: (${px}, ${py}). Now click the opposite corner. Click this bar to cancel.`); return; }
+      const x = Math.min(first.x, px), y = Math.min(first.y, py), w = Math.abs(first.x - px) + 1, h = Math.abs(first.y - py) + 1;
+      stop(false);
+      say('Saving that area…');
+      try { say(await protectArea(x, y, w, h)); } catch { say("Couldn't read the board. Try again."); }
+      hideT = setTimeout(hide, 6000);
+    }
+    function start() {
+      if (on) return;
+      const cv = findCv();
+      if (!cv) return;   // this tab has no board
+      on = true; first = null; doc = cv.ownerDocument;
+      doc.addEventListener('pointerdown', onDown, true);
+      doc.addEventListener('click', onClick, true);
+      say('Click one corner of the painting you want to protect. You can still move and zoom the board. Click this bar to cancel.');
+    }
+    const fresh = (t) => !!t && Date.now() - t < 180000;   // a forgotten selection switches itself off after 3 minutes
+    try {
+      chrome.storage.onChanged.addListener((ch) => { if (!ch.pick || !alive()) return; if (fresh(ch.pick.newValue)) start(); else if (on) stop(true); });
+      chrome.storage.local.get('pick').then((s) => { if (fresh(s.pick)) setTimeout(start, 1200); }).catch(() => {});
+    } catch { /* reloaded */ }
+  }
+  areaPicker();
+
 
   // a tab waiting for the lock says so, instead of looking dead
   status({ state: 'waiting', msg: 'Bot loaded in a site tab, starting…' });

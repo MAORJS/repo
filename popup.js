@@ -255,7 +255,7 @@ async function drawGuard() {
   const { guard = [] } = await chrome.storage.local.get('guard');
   hint('guardHint', guard.length ? String(guard.length) : 'none');
   if (!guard.length) return ($('guardList').textContent = 'None yet. An art is added here by itself when it is finished.');
-  $('guardList').innerHTML = guard.map((g, k) => `<div class="row" style="justify-content:space-between;margin:2px 0"><span>${g.art.w}×${g.art.h} at (${g.origin.x}, ${g.origin.y})${g.size > 1 ? ', team of ' + g.size : ''}</span><button class="sec" data-k="${k}" style="padding:2px 8px">Remove</button></div>`).join('') +
+  $('guardList').innerHTML = guard.map((g, k) => `<div class="row" style="justify-content:space-between;margin:2px 0"><span>${g.snap ? 'Area ' : ''}${g.art.w}×${g.art.h} at (${g.origin.x}, ${g.origin.y})${g.size > 1 ? ', team of ' + g.size : ''}</span><button class="sec" data-k="${k}" style="padding:2px 8px">Remove</button></div>`).join('') +
     '<div style="margin-top:4px">In a team, every friend\'s bot adds the art when it sees it finished, and repairs its own share first.</div>';
   $('guardList').querySelectorAll('button').forEach((b) => { b.onclick = async () => {
     const { guard = [] } = await chrome.storage.local.get('guard');
@@ -272,6 +272,33 @@ const saveApproved = () => (approvedHint(), chrome.storage.local.set({
   approved: $('approved').value.split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean),
 }));
 $('approvedOn').onchange = saveApproved; $('approved').onchange = saveApproved;
+// protect what is already painted between two corners (the same thing the on-board selection does)
+async function hasGuards() { const { guard = [] } = await chrome.storage.local.get('guard'); return guard.length > 0; }
+$('guardArea').onclick = async () => {
+  const v = ['gx1', 'gy1', 'gx2', 'gy2'].map((id) => ($(id).value === '' ? NaN : Math.floor(+$(id).value)));
+  if (v.some((n) => !(n >= 0))) return ($('guardInfo').innerHTML = '<span class="bad">Fill in all four numbers.</span>');
+  $('guardInfo').textContent = 'Reading the board…';
+  let b;
+  try { if (!(await loadMeta())) throw 0; b = await loadBoard(); } catch { return ($('guardInfo').innerHTML = '<span class="bad">Couldn\'t load the board. Is the site up?</span>'); }
+  const x = Math.min(v[0], v[2]), y = Math.min(v[1], v[3]), x2 = Math.max(v[0], v[2]), y2 = Math.max(v[1], v[3]);
+  if (x2 >= W || y2 >= H) return ($('guardInfo').innerHTML = `<span class="bad">Outside the board, which is ${W}×${H}.</span>`);
+  const w = x2 - x + 1, h = y2 - y + 1, WHITE = PAL.length - 1, data = [];
+  if (w * h > 60000) return ($('guardInfo').innerHTML = '<span class="bad">Too big. Select at most 60000 pixels at a time.</span>');
+  let n = 0;
+  for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) { const c = b[(y + yy) * W + x + xx]; if (c === WHITE) data.push(-1); else { data.push(c); n++; } }
+  if (!n) return ($('guardInfo').innerHTML = '<span class="bad">Nothing is painted in that area.</span>');
+  const a = { w, h, data }, o = { x, y }, key = artKey(a, o);
+  const { guard = [] } = await chrome.storage.local.get('guard');
+  if (!guard.some((g) => g.key === key)) await chrome.storage.local.set({ guard: [...guard, { key, art: a, origin: o, size: 1, snap: true, t: Date.now() }].slice(-30) });
+  drawGuard();
+  $('guardInfo').innerHTML = `<span class="good">Protected ${w}×${h} at (${x}, ${y}): ${n} pixels ✓</span> The bot must be on to keep it repaired.`;
+};
+$('pickArea').onclick = async () => {
+  await chrome.storage.local.set({ pick: Date.now() });
+  $('guardInfo').textContent = 'Go to the canvas tab and click the two corners.';
+  await $('openSite').onclick();
+  try { window.close(); } catch { /* not a popup */ }
+};
 $('autoGuard').onchange = () => chrome.storage.local.set({ autoGuard: $('autoGuard').checked });
 
 // ---------- night mode: the bot runs unattended and keeps a report ----------
@@ -287,7 +314,7 @@ async function drawNight() {
 }
 $('night').onchange = async () => {
   const on = $('night').checked;
-  if (on && !art) { $('night').checked = false; return ($('status').textContent = 'Pick or upload an art first (step 1).'); }
+  if (on && !art && !(await hasGuards())) { $('night').checked = false; return ($('status').textContent = 'Pick or upload an art first (step 1).'); }
   if (on) {
     await saveOrigin();
     await chrome.storage.local.set({ night: true, enabled: true, autoOpen: true, nightSince: Date.now(), nightStats: { painted: 0, repaired: 0, replaced: 0 }, nightLog: [] });
@@ -322,8 +349,8 @@ async function paintToggle(enabled) {
 $('toggle').onclick = async () => {
   const { enabled } = await chrome.storage.local.get('enabled');
   if (!enabled) {
-    if (!art) return ($('status').textContent = 'Pick or upload an art first (step 1).');
-    await saveOrigin();
+    if (!art && !(await hasGuards())) return ($('status').textContent = 'Pick or upload an art first (step 1), or protect an area.');
+    if (art) await saveOrigin();
     const tabs = await chrome.tabs.query({ url: BASE + '/*' });
     if (!tabs.length) chrome.tabs.create({ url: BASE + '/canvas', active: false });
   }
