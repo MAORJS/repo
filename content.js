@@ -11,7 +11,8 @@
   const EDGE = 40;                  // wake this long after a new pixel is due, so the request isn't a hair early
   const IDLE = 10000;               // re-check this often while closed / off / finished (the live feed wakes it sooner)
   const BOARD_REFRESH_LIVE = 120000; // full board re-download while the live feed is connected (safety net)
-  const BOARD_REFRESH = 30000;      // ... and while it is not
+  const BOARD_REFRESH = 30000;
+  const BOARD_REFRESH_CLOSED = 300000;   // ... and while the canvas is closed (only read for scanning)      // ... and while it is not
   const META_REFRESH = 20000;
   const NAME_REFRESH = 60000;
 
@@ -223,7 +224,8 @@
       // (in your own art a wrong colour that is not empty is also the defender's: it was painted over, whenever that happened)
       const job = foreign ? 'replace' : guard === true ? 'defend' : 'draw';
       const also = !foreign && (guard === 'own' || (!guard && cur !== WHITE)) ? 'defend' : '';
-      if (role !== 'all' && role !== job && role !== also) { other++; continue; }
+      // a protector only looks after finished things: the protected list, and your own art once it was finished
+      if (role !== 'all' && role !== job && role !== also && !(role === 'protect' && guard && !foreign)) { other++; continue; }
       n++; if (foreign) { retake++; bad.set(who, (bad.get(who) || 0) + 1); }
       let score;
       if (order === 'random') score = Math.random();
@@ -233,7 +235,7 @@
       if (!head[share] || score < head[share].score) head[share] = { score, i };
       if (guard && share !== slot) {   // a griefed pixel of a teammate's share: let them go first
         if (!wrongSince.has(i)) wrongSince.set(i, Date.now());
-        if (Date.now() - wrongSince.get(i) < (role === 'defend' ? DEFEND_DELAY : HELP_DELAY)) continue;
+        if (Date.now() - wrongSince.get(i) < (quick() ? DEFEND_DELAY : HELP_DELAY)) continue;
       }
       if (share !== slot) { rest.push({ score, share, p: { x: bx, y: by, c, i, share } }); continue; }
       mine++;
@@ -247,7 +249,7 @@
         if (ts.head[s] !== undefined && ts.head[s] !== h) ts.seen[s] = now;
         ts.head[s] = h;
       }
-      if (!next && role !== 'defend' && role !== 'replace') {   // a defender or replacer covers the whole art, not only its share
+      if (!next && !quick() && role !== 'replace') {   // a defender or replacer covers the whole art, not only its share
         const free = rest.filter((r) => now - (ts.seen[r.share] || ts.t0) >= HELP_IDLE);
         waiting = rest.length - free.length;
         rest.length = 0; rest.push(...free);
@@ -263,7 +265,8 @@
   // your job: 'all' (default), 'draw' (only paint the art), 'replace' (only repaint pixels by painters who are
   // not approved), 'defend' (only repair protected arts that were painted over)
   let role = 'all';
-  const JOBS = { draw: 'Drawing only', replace: 'Replacing non-approved painters only', defend: 'Defending protected arts only' };
+  const JOBS = { draw: 'Drawing only', replace: 'Replacing non-approved painters only', defend: 'Defending only', protect: 'Protecting finished arts only' };
+  const quick = () => role === 'defend' || role === 'protect';
   let teamState = null;   // per share: finished pixels at the last look, and when it last grew
   // approved painters: null = feature off, else the lower-case names whose pixels are left alone
   let approved = null, watch = [];
@@ -278,7 +281,7 @@
     for (;;) {
       if (!alive()) return;
       let i = -1;
-      if (approved && board && isOpen(meta) && (id === 0 || role === 'replace')) {
+      if (approved && board && wantOn && (id === 0 || role === 'replace')) {
         const ok = (k) => board[k] !== WHITE && !owner.has(k) && !asking.has(k);
         while (hot.length && i < 0) { const k = hot.pop(); if (watchSet.has(k) && ok(k)) i = k; }
         if (i < 0) for (const k of watch) if (board[k] !== want.get(k) && ok(k)) { i = k; break; }
@@ -387,7 +390,7 @@
   // ---------- the loop ----------
   // The art and the protected areas can be megabytes; reading them from storage for every pixel made everything
   // slow. They are kept here and re-read only when they change (plus a slow safety re-read).
-  let heavy = null, heavyAt = 0, heavyDirty = true, lastRepair = false;
+  let heavy = null, heavyAt = 0, heavyDirty = true, lastRepair = false, wasClosed = false;
   const HEAVY_REFRESH = 15000;
   const keyMemo = { art: null, x: 0, y: 0, key: '' };
   const keyOf = (a, o) => {
@@ -418,18 +421,23 @@
         liveStart();
 
         if (!meta || Date.now() - metaAt > META_REFRESH) await getMeta();
-        if (!isOpen(meta)) {
+        // While the canvas is closed, a replacer (and "everything" with approved painters on) already finds out who
+        // painted each pixel, so the moment it opens it knows what to replace. The other jobs just wait.
+        const closed = !isOpen(meta), scan = role === 'replace' || (role === 'all' && cfg.approvedOn !== false);
+        if (closed && !scan) {
+          wasClosed = true;
           status({ state: 'waiting', msg: 'Canvas is closed. Waiting for it to open…', pool: poolText() });
           await sleep(IDLE, true); metaAt = liveOk ? metaAt : 0; continue;
         }
+        if (!closed && wasClosed) { wasClosed = false; boardAt = 0; }   // it just opened: start from a fresh board
 
-        if (!board || Date.now() - boardAt > (liveOk ? BOARD_REFRESH_LIVE : BOARD_REFRESH)) await loadBoard();
+        if (!board || Date.now() - boardAt > (closed ? BOARD_REFRESH_CLOSED : liveOk ? BOARD_REFRESH_LIVE : BOARD_REFRESH)) await loadBoard();
         const placed = new Set(cfg.placed || []);
         // protected arts first: repair what was painted over
         const guards = Array.isArray(cfg.guard) ? cfg.guard : [], curKey = keyOf(cfg.art, cfg.origin);
         // approved painters: your own account plus the names in the popup
         // drawers and defenders don't need to know who painted what; a replacer always does
-        if (role === 'draw' || role === 'defend' || (cfg.approvedOn === false && role !== 'replace')) { approved = null; watch = []; }
+        if (role === 'draw' || quick() || (cfg.approvedOn === false && role !== 'replace')) { approved = null; watch = []; }
         else {
           const me = (await getName()).toLowerCase();
           approved = new Set((Array.isArray(cfg.approved) ? cfg.approved : DEFAULT_APPROVED).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
@@ -446,6 +454,13 @@
           want = w2; watchAll = list; watchSet = new Set(list);
         }
         watch = approved ? watchAll : [];
+        if (closed) {
+          wasClosed = true;
+          let unknown = 0, bad = 0;
+          for (const k of watch) if (board[k] !== WHITE) { const o = owner.get(k); if (o === undefined) unknown++; else if (o && !approved.has(o)) bad++; }
+          status({ state: 'waiting', msg: 'Canvas is closed. Waiting for it to open…', pool: poolText(), who: unknown ? `Scanning who painted each pixel while it is closed: ${unknown} left` + (bad ? `, ${bad} to replace so far` : '') : `Scan finished: ${bad} px to replace when it opens` });
+          await sleep(unknown ? 3000 : IDLE, true); metaAt = liveOk ? metaAt : 0; continue;
+        }
         const guarded = guards.some((g) => g.key === curKey);
         let repair = null, repairLeft = 0, otherJobs = 0;
         for (const g of guards) {
@@ -484,7 +499,7 @@
         }
         if (!p.next && !repair && (p.todo || repairLeft)) {
           status({ state: 'painting', ...progress, pool: poolText(), msg: 'Someone painted over a protected art. Giving the teammate who owns that pixel a few seconds to repair it first…' });
-          await sleep(role === 'defend' ? 500 : 3000, true); continue;
+          await sleep(quick() ? 500 : 3000, true); continue;
         }
         if (!p.next && !repair) {
           status({

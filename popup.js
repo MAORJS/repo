@@ -183,7 +183,8 @@ const ROLE_INFO = {
   all: 'Does everything: paints the art, repairs protected arts, replaces non-approved painters.',
   draw: 'Only paints the art, and keeps it painted. Never spends a pixel on other protected arts or on checking painters.',
   replace: 'Only repaints pixels that someone not on the approved list painted. Paints nothing else.',
-  defend: 'Only repairs finished or protected arts when someone paints over them. Does not paint an unfinished art.',
+  defend: 'Repairs anything that was painted over: finished and protected arts, and wrong colours inside an art that is still being painted. Does not fill empty pixels.',
+  protect: 'Only repairs finished things: the arts in the Protected list, and your own art once it has been finished. Leaves an unfinished art alone.',
 };
 function drawRole() { $('roleInfo').textContent = ROLE_INFO[$('role').value] || ''; }
 $('role').onchange = () => { chrome.storage.local.set({ role: $('role').value }); drawRole(); };
