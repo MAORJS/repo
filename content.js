@@ -186,15 +186,12 @@
   // ---------- which pixel next ----------
   // Every art pixel is: done (right colour already), blocked (someone else's colour, skipped while
   // "protect" is on) or still to paint. `order` picks among the ones still to paint.
-  // Team: with N friends, the art's pixels are dealt out like cards (1st to member 1, 2nd to member 2, …), so
-  // every share has the same number of pixels whatever the shape. Everyone paints their own share first, and
-  // helps with another share only when its owner has stopped (offline or stuck); while all friends are painting,
-  // everyone paints the same amount. An owner works from the front of their share (in the paint order) and
-  // helpers from the back, so "the front pixel of a share has not moved for HELP_IDLE" means its owner stopped.
-  // That is why a team should use the same paint order (it travels in the team code).
-  // When they do help: the leftovers are put in one list and every
-  // member starts at a different place in it (member 1 at the end, the others spread out before it), so
-  // helpers don't pick the same pixel as each other or as the owner, who works from the start.
+  // Team: with N friends, the art is cut into N equal solid blocks (top to bottom), one per friend. Everyone
+  // paints their own block first, in the paint order. A friend whose block is finished helps at once with the
+  // block that has the most left: the owner works from the front of the order, helpers from the back (each
+  // helper a different pixel), so they meet in the middle instead of painting the same pixels.
+  // Paint order 'inward' (the default): the outline of the picture first, then ring by ring towards the inside,
+  // each ring traced around like a person would draw it.
   function pickNext(art, origin, protect, placed, order, team, guard, ts) {
     let total = 0, done = 0, blocked = 0, next = null, best = Infinity, n = 0, mine = 0, retake = 0, right = 0, other = 0;
     const bad = new Map();   // non-approved painters found in this art -> how many pixels
@@ -203,6 +200,25 @@
     const cx = (art.w - 1) / 2, cy = (art.h - 1) / 2;
     const at = (x, y) => (x < 0 || y < 0 || x >= art.w || y >= art.h ? -1 : art.data[y * art.w + x]);
     const edge = (x, y, c) => at(x - 1, y) !== c || at(x + 1, y) !== c || at(x, y - 1) !== c || at(x, y + 1) !== c;
+    // 'inward': how many pixels each pixel is from the outside of the picture (0 = the outline), then the angle
+    // around the middle, so a ring is drawn as one line going round
+    let inw = null;
+    if (order === 'inward') {
+      const memo = pickNext.inw || (pickNext.inw = new WeakMap());
+      inw = memo.get(art);
+      if (!inw) {
+        const w = art.w, h = art.h, d = new Int32Array(w * h).fill(-1); let q = [];
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (at(x, y) >= 0 && (at(x - 1, y) < 0 || at(x + 1, y) < 0 || at(x, y - 1) < 0 || at(x, y + 1) < 0)) { d[y * w + x] = 0; q.push(y * w + x); }
+        for (let layer = 1; q.length; layer++) {
+          const nq = [];
+          for (const k of q) { const x = k % w, y = (k - x) / w; for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) { const j = ny * w + nx; if (at(nx, ny) >= 0 && d[j] < 0) { d[j] = layer; nq.push(j); } } }
+          q = nq;
+        }
+        inw = new Float64Array(w * h);
+        for (let k = 0; k < w * h; k++) { const x = k % w, y = (k - x) / w; inw[k] = d[k] * 10 + (Math.atan2(x - cx, cy - y) + Math.PI) / (2 * Math.PI + 1e-9); }   // starts at the top, goes round
+        memo.set(art, inw);
+      }
+    }
     const per = new Array(size).fill(0);       // per share: pixels still to paint
     const head = new Array(size).fill(null);   // per share: its first pixel still to paint
     let rank = -1, waiting = 0;
@@ -235,6 +251,7 @@
       n++; per[share]++; if (foreign) { retake++; bad.set(who, (bad.get(who) || 0) + 1); }
       let score;
       if (order === 'random') score = Math.random();
+      else if (inw) score = inw[y * art.w + x];
       else if (order === 'center') score = (x - cx) ** 2 + (y - cy) ** 2;
       else if (order === 'outline') score = (c === 27 ? 0 : edge(x, y, c) ? 1e6 : 2e6) + y * art.w + x;   // black lines, then every edge, then the fill
       else score = y * art.w + x;                                                   // top to bottom
@@ -243,8 +260,7 @@
         if (!wrongSince.has(i)) wrongSince.set(i, Date.now());
         if (Date.now() - wrongSince.get(i) < (quick() ? DEFEND_DELAY : HELP_DELAY)) continue;
       }
-      // (sub: which part of that friend's block this pixel is in, so each helper takes a solid part of it)
-      if (share !== slot) { rest.push({ score, share, sub: Math.min(size - 1, Math.floor((rank * size / count - share) * size)), p: { x: bx, y: by, c, i, share } }); continue; }
+      if (share !== slot) { rest.push({ score, share, p: { x: bx, y: by, c, i, share } }); continue; }
       mine++;
       if (score < best) { best = score; next = { x: bx, y: by, c, i, share }; }
     }
@@ -256,22 +272,14 @@
         if (ts.head[s] !== undefined && ts.head[s] !== h) ts.seen[s] = now;
         ts.head[s] = h;
       }
-      if (!next && !quick() && role !== 'replace') {   // a defender or replacer covers the whole art, not only its share
-        const free = rest.filter((r) => now - (ts.seen[r.share] || ts.t0) >= HELP_IDLE);
-        waiting = rest.length - free.length;
-        rest.length = 0; rest.push(...free);
-      }
     }
     if (!next && rest.length) {
-      rest.sort((a, b) => a.score - b.score);
-      // helping a friend who stopped: first the part of their block with your own number, front to back like any
-      // painter, so helpers fill solid pieces and stay out of each other's way; after that, whatever is left
-      // A helper leaves the front pixel of the block for last: that pixel moving is how everyone sees that the
-      // owner is back, so helpers must not move it themselves.
-      const notHead = (r) => !(head[r.share] && head[r.share].i === r.p.i);
-      const part = rest.find((r) => r.sub === slot && notHead(r));
-      const free = rest.filter(notHead), list = free.length ? free : rest;
-      next = (part || list[list.length - 1 - Math.floor(slot * list.length / size)]).p;
+      // your own block is finished: help at once with the block that has the most left, from the back of the
+      // paint order (the owner comes from the front), each helper a different pixel
+      let big = rest[0].share; for (const r of rest) if (per[r.share] > per[big]) big = r.share;
+      let list = rest.filter((r) => r.share === big).sort((a, b) => a.score - b.score);
+      if (list.length <= slot) list = rest.sort((a, b) => a.share - b.share || a.score - b.score);   // few left there: spread the helpers over everything left
+      next = list[list.length - 1 - (slot % list.length)].p;
     }
     return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad, other, per };
   }
@@ -404,6 +412,7 @@
   // ---------- the loop ----------
   // The art and the protected areas can be megabytes; reading them from storage for every pixel made everything
   // slow. They are kept here and re-read only when they change (plus a slow safety re-read).
+  let orderMoved = false;   // the saved paint order was switched once to the new default (outline to inside)
   let heavy = null, heavyAt = 0, heavyDirty = true, lastRepair = false, wasClosed = false;
   const HEAVY_REFRESH = 15000;
   const keyMemo = { art: null, x: 0, y: 0, key: '' };
@@ -418,6 +427,7 @@
       try {
         const cfg = await chrome.storage.local.get(['enabled', 'origin', 'protect', 'placed', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats', 'overlay', 'role']);
         role = JOBS[cfg.role] ? cfg.role : 'all';
+        if (!orderMoved) { orderMoved = true; const o = await chrome.storage.local.get('orderV2'); if (!o.orderV2) { cfg.order = 'inward'; await chrome.storage.local.set({ order: 'inward', orderV2: 1 }); } }
         if (!heavy || heavyDirty || Date.now() - heavyAt > HEAVY_REFRESH) {
           heavyDirty = false;
           heavy = await chrome.storage.local.get(['art', 'guard']); heavyAt = Date.now();
@@ -487,11 +497,11 @@
         }
         const tsKey = curKey + '|' + JSON.stringify(cfg.team || 0) + '|' + cfg.order;
         if (!teamState || teamState.key !== tsKey) teamState = { key: tsKey, t0: Date.now(), head: [], seen: [] };
-        const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false && !guarded && role !== 'defend', placed, cfg.order, cfg.team, guarded ? 'own' : false, teamState);
+        const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false && !guarded && role !== 'defend', placed, cfg.order || 'inward', cfg.team, guarded ? 'own' : false, teamState);
         otherJobs += p.other;
         // "done" shown to you counts every pixel with the right colour, so all teammates see the same number
         const progress = { total: p.total, done: p.right, blocked: p.blocked, session: sessionPainted };
-        if (p.size > 1) progress.team = p.mine ? `${p.mine} of your share left` : p.waiting && !p.next ? `Your share is done. Teammates are painting theirs (${p.todo} left); you step in if one stops for 20 s` : p.todo ? `Your share is done, helping a teammate who stopped (${p.todo} left)` : 'All done';
+        if (p.size > 1) progress.team = p.mine ? `${p.mine} of your share left` : p.waiting && !p.next ? `Your share is done (${p.todo} left for teammates)` : p.todo ? `Your share is done, helping the friend with the most left (${p.todo} left in all)` : 'All done';
         if (p.size > 1 && (role === 'all' || role === 'draw')) {   // who in the team is painting, and how much each has left
           const now = Date.now(), my = Math.min(p.size, Math.max(1, (cfg.team && cfg.team.slot) || 1)) - 1;
           progress.shares = p.per.map((k, s) => '#' + (s + 1) + (s === my ? ' (you)' : '') + ': ' + (!k ? 'done' : s === my || now - (teamState.seen[s] || teamState.t0) < HELP_IDLE ? k + ' left' : k + ' left, not painting')).join(' · ');

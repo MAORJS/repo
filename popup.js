@@ -211,7 +211,7 @@ async function saveTeam() {
   drawTeam({ size, slot }); checkSoon();
 }
 $('teamSize').onchange = saveTeam; $('teamSlot').onchange = saveTeam;
-const ORDERS = ['rows', 'outline', 'center', 'random'];
+const ORDERS = ['rows', 'outline', 'center', 'random', 'inward'];
 const bin64 = (b) => { let s = ''; for (let k = 0; k < b.length; k++) s += String.fromCharCode(b[k]); return btoa(s); };
 // one protected art: size and spot (2 bytes each), flags (team size, +128 = a selected area), then the pixels
 function guardEncode(g) {
@@ -256,7 +256,7 @@ function teamDecode(code) {
   const w = b[0] << 8 | b[1], h = b[2] << 8 | b[3];
   if (!w || !h || w > 500 || h > 500 || b.length !== 9 + w * h) throw new Error('a damaged team code');
   const size = Math.min(8, Math.max(1, b[8] & 15));
-  return { names, guards, order: ORDERS[b[8] >> 4] || 'rows', art: { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin: { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] }, size };
+  return { names, guards, order: ORDERS[b[8] >> 4] || 'inward', art: { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin: { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] }, size };
 }
 $('teamCopy').onclick = async () => {
   if (!art) return ($('teamInfo').textContent = 'Pick or upload an art first.');
@@ -428,7 +428,7 @@ function showStatus(s) {
 chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); if (ch.me) drawMe(ch.me.newValue); if (ch.nightStats || ch.nightLog || ch.night) drawNight(); });
 
 (async () => {
-  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'me', 'overlay', 'overlayBoard', 'role']);
+  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'me', 'overlay', 'overlayBoard', 'role', 'orderV2']);
   $('role').value = ROLE_INFO[s.role] ? s.role : 'all'; drawRole();
   drawMe(s.me);
   drawNight();
@@ -437,7 +437,8 @@ chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.stat
   $('autoGuard').checked = s.autoGuard !== false;
   drawGuard();
   drawTeam(s.team);
-  $('order').value = s.order || 'rows';
+  if (!s.orderV2) { s.order = 'inward'; chrome.storage.local.set({ order: 'inward', orderV2: 1 }); }   // one-time switch to the new default
+  $('order').value = s.order || 'inward';
   if (s.presetId) { $('preset').value = s.presetId; $('scale').value = String(s.presetScale || 1); }
   await refreshCanvasState();
   art = s.art || null; drawPreview();
