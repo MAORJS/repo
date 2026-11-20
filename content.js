@@ -7,7 +7,8 @@
 //  - Background tabs: its timers run in a worker, so Chrome's background-tab throttling doesn't slow it down.
 (() => {
   const DELAY = 5200;               // fallback wait when the server gives no timing
-  const GAP = 350;                  // pause between pixels while the pool has some
+  const GAP = 80;                   // pause between pixels while the pool has some (the site's answer already paces it)
+  const EDGE = 40;                  // wake this long after a new pixel is due, so the request isn't a hair early
   const IDLE = 10000;               // re-check this often while closed / off / finished (the live feed wakes it sooner)
   const BOARD_REFRESH_LIVE = 120000; // full board re-download while the live feed is connected (safety net)
   const BOARD_REFRESH = 30000;      // ... and while it is not
@@ -360,13 +361,16 @@
         const wait = poolWait();
         if (wait > 0) {
           status({ state: 'painting', msg: `Out of pixels, next one in ${Math.ceil(wait / 1000)} s`, pool: poolText(), eta: eta(p.todo), ...progress });
-          await sleep(wait + 120);
+          await sleep(wait + EDGE);
           continue;
         }
 
         const isRepair = !!repair;
         const { x, y, c, i } = repair || p.next;
         const was = board[i];
+        // someone (a teammate, or you by hand) painted it right while we were getting ready: don't spend a pixel on it
+        const stillForeign = !!approved && !!owner.get(i) && !approved.has(owner.get(i));
+        if (was === c && !stillForeign) continue;
         const r = await fetch('/api/canvas/pixel', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -394,7 +398,7 @@
           syncPool(j);
           if (pool.charges > 0) { pool.charges = 0; pool.nextAt = Date.now() + j.waitMs; }
           status({ state: 'painting', msg: `Out of pixels, next one in ${Math.ceil(j.waitMs / 1000)} s`, pool: poolText(), eta: eta(p.todo), ...progress });
-          await sleep(j.waitMs + 120);
+          await sleep(j.waitMs + EDGE);
         } else if (j.login) {
           myName = ''; nameAt = 0;
           status({ state: 'error', msg: 'The site wants you to log in with Kick.', ...progress }); await sleep(IDLE, true);
