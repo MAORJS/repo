@@ -368,12 +368,27 @@
   }
 
   // ---------- the loop ----------
+  // The art and the protected areas can be megabytes; reading them from storage for every pixel made everything
+  // slow. They are kept here and re-read only when they change (plus a slow safety re-read).
+  let heavy = null, heavyAt = 0, heavyDirty = true, lastRepair = false;
+  const HEAVY_REFRESH = 15000;
+  const keyMemo = { art: null, x: 0, y: 0, key: '' };
+  const keyOf = (a, o) => {
+    if (keyMemo.art !== a || keyMemo.x !== o.x || keyMemo.y !== o.y) { keyMemo.art = a; keyMemo.x = o.x; keyMemo.y = o.y; keyMemo.key = artKey(a, o); }
+    return keyMemo.key;
+  };
   async function loop() {
     let fails = 0;
     for (;;) {
       if (!alive()) { liveStop(); return; }
       try {
-        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats', 'overlay']);
+        const cfg = await chrome.storage.local.get(['enabled', 'origin', 'protect', 'placed', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats', 'overlay']);
+        if (!heavy || heavyDirty || Date.now() - heavyAt > HEAVY_REFRESH) {
+          heavyDirty = false;
+          heavy = await chrome.storage.local.get(['art', 'guard']); heavyAt = Date.now();
+        }
+        if (heavy.art) cfg.art = heavy.art;
+        if (heavy.guard) cfg.guard = heavy.guard;
         wantOn = !!cfg.enabled; ovCfg = cfg; renderOverlay(cfg);
         const hasArt = !!(cfg.art && cfg.origin), hasGuard = Array.isArray(cfg.guard) && cfg.guard.length > 0;
         if (!cfg.enabled || (!hasArt && !hasGuard)) {
@@ -393,7 +408,7 @@
         if (!board || Date.now() - boardAt > (liveOk ? BOARD_REFRESH_LIVE : BOARD_REFRESH)) await loadBoard();
         const placed = new Set(cfg.placed || []);
         // protected arts first: repair what was painted over
-        const guards = Array.isArray(cfg.guard) ? cfg.guard : [], curKey = artKey(cfg.art, cfg.origin);
+        const guards = Array.isArray(cfg.guard) ? cfg.guard : [], curKey = keyOf(cfg.art, cfg.origin);
         // approved painters: your own account plus the names in the popup
         if (cfg.approvedOn === false) { approved = null; watch = []; }
         else {
@@ -433,6 +448,7 @@
           // just seen complete: remember it so it gets repaired from now on
           const entry = { key: curKey, art: cfg.art, origin: cfg.origin, size: cfg.team && cfg.team.size > 1 ? cfg.team.size : 1, t: Date.now() };
           await chrome.storage.local.set({ guard: [...guards, entry].slice(-MAX_GUARD) });
+          heavyDirty = true;
           continue;
         }
         if (!p.next && !repair && p.waiting && !repairLeft) {
@@ -464,6 +480,9 @@
           continue;
         }
 
+        // your own art still has pixels to paint: repairs get every second pixel at most, so a protected area
+        // that keeps being painted over can't stop your art
+        if (repair && p.next && lastRepair) repair = null;
         const isRepair = !!repair;
         const { x, y, c, i } = repair || p.next;
         const was = board[i];
@@ -478,7 +497,7 @@
         const j = await r.json().catch(() => ({}));
         if (r.status < 500) netFails = 0; else if (lostConnection()) return;
         if (j.ok) {
-          fails = 0; sessionPainted++;
+          fails = 0; sessionPainted++; lastRepair = isRepair;
           if (board) board[i] = c;
           owner.set(i, name.toLowerCase());
           if (!isRepair) placed.add(i);
@@ -520,7 +539,7 @@
   }
 
   // start/stop and new settings take effect at once instead of at the next check
-  try { chrome.storage.onChanged.addListener((ch) => { if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard || ch.approved || ch.approvedOn || ch.overlay) wake(); }); } catch { /* reloaded */ }
+  try { chrome.storage.onChanged.addListener((ch) => { if (ch.art || ch.guard) heavyDirty = true; if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard || ch.approved || ch.approvedOn || ch.overlay) wake(); }); } catch { /* reloaded */ }
 
   // ========= board-aligned ghost: draws the art straight onto the site's board, glued to its pan and zoom =========
   // The board is rendered 1:1 into a <canvas id="cv"> (canvas pixel = board pixel) and panned/zoomed with a CSS
@@ -530,6 +549,7 @@
   function boardGhost() {
     if (typeof document === 'undefined') return;   // the test harness has no page
     let ov = null, view = null, raf = 0, cv = null, timer = 0, loadHook = false, pal = null, palAt = 0, cfg = null;
+    let until = 0, mo = null, last = {}, ticks = 0, redraw = true;
     const hex = (h) => { const n = parseInt((h || '#ffffff').slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
     async function palette() {
       if (pal && Date.now() - palAt < 60000) return pal;
@@ -541,19 +561,26 @@
       for (const f of document.querySelectorAll('iframe')) { try { const d = f.contentDocument, x = d && d.getElementById('cv'); if (x) return x; } catch { /* cross-origin */ } }
       return null;
     }
-    function detach() { if (view && raf) { try { view.cancelAnimationFrame(raf); } catch { /* ok */ } } raf = 0; if (ov) { try { ov.remove(); } catch { /* gone */ } ov = null; } cv = null; view = null; }
-    // Keep the ghost glued to the board every frame, in the iframe's OWN animation frame (so it reads the board's
-    // final transform for the frame, with no lag). Copy the COMPUTED transform and transform-origin — that is
-    // exactly what the board is rendered with, including the pan/zoom, so the overlay lines up to the pixel.
+    function detach() { if (mo) { try { mo.disconnect(); } catch { /* ok */ } mo = null; } last = {}; if (view && raf) { try { view.cancelAnimationFrame(raf); } catch { /* ok */ } } raf = 0; if (ov) { try { ov.remove(); } catch { /* gone */ } ov = null; } cv = null; view = null; }
+    // Keep the ghost glued to the board, in the iframe's OWN animation frame. Copy the COMPUTED transform and
+    // transform-origin: that is exactly what the board is rendered with, including the pan/zoom, so the overlay
+    // lines up to the pixel. This runs only while the board is moving (kick() is called when its style changes)
+    // and for a moment after, so a board that stands still costs nothing.
+    const put = (k, v) => { if (last[k] !== v) { last[k] = v; ov.style[k] = v; } };
     function frame() {
+      raf = 0;
       if (!ov || !cv || !cv.isConnected || ov.ownerDocument !== cv.ownerDocument) { detach(); return; }
       if (ov.width !== cv.width || ov.height !== cv.height) { ov.width = cv.width; ov.height = cv.height; draw(); }   // board resized (also clears ov)
       const cs = view.getComputedStyle(cv);
-      ov.style.transform = cs.transform === 'none' ? '' : cs.transform;
-      ov.style.transformOrigin = cs.transformOrigin;
-      ov.style.left = cv.offsetLeft + 'px'; ov.style.top = cv.offsetTop + 'px';
-      ov.style.width = cv.offsetWidth + 'px'; ov.style.height = cv.offsetHeight + 'px';
-      raf = view.requestAnimationFrame(frame);
+      put('transform', cs.transform === 'none' ? '' : cs.transform);
+      put('transformOrigin', cs.transformOrigin);
+      put('left', cv.offsetLeft + 'px'); put('top', cv.offsetTop + 'px');
+      put('width', cv.offsetWidth + 'px'); put('height', cv.offsetHeight + 'px');
+      if (Date.now() < until) raf = view.requestAnimationFrame(frame);
+    }
+    function kick(ms) {
+      until = Math.max(until, Date.now() + ms);
+      if (!raf && view && ov) raf = view.requestAnimationFrame(frame);
     }
     async function draw() {
       if (!ov || !cv || !cv.isConnected) return;
@@ -587,18 +614,32 @@
       ov.style.cssText = 'position:absolute;pointer-events:none;image-rendering:pixelated;transition:none';   // no transition, so it snaps to the board exactly
       cv.after(ov);   // above #cv, below #grid and #aim
       if (!loadHook) { loadHook = true; for (const f of document.querySelectorAll('iframe')) f.addEventListener('load', () => { cv = null; setTimeout(tick, 300); }); }
-      frame(); draw();
+      try {
+        mo = new view.MutationObserver(() => kick(400));   // the site moved or zoomed the board
+        mo.observe(cv, { attributes: true, attributeFilter: ['style', 'class', 'width', 'height'] });
+        if (cv.parentElement) mo.observe(cv.parentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+      } catch { /* no observer: the timer below still re-aligns it */ }
+      frame(); kick(400); redraw = true;
       return true;
     }
-    async function tick() {
+    function tick() {
       if (!alive()) { detach(); if (timer) { clearInterval(timer); timer = 0; } return; }
-      try { cfg = await chrome.storage.local.get(['overlayBoard', 'art', 'origin']); } catch { return; }
+      if (!cfg) return;   // settings not read yet
       if (cfg.overlayBoard === false || !cfg.art || !cfg.origin) { detach(); return; }
       if (!attach()) return;   // no board on this page yet
-      draw();                  // the frame() loop keeps it aligned; this refreshes done/to-paint
+      kick(0);                 // safety net: re-align once, in case a move was missed
+      if (redraw || ++ticks % 3 === 0) { redraw = false; draw(); }   // refresh done/to-paint about every 2 s
     }
+    // the settings are read once and then followed through change events, not re-read on a timer
+    try {
+      chrome.storage.onChanged.addListener((ch) => {
+        if (!cfg || !alive() || !(ch.overlayBoard || ch.art || ch.origin)) return;
+        for (const k of ['overlayBoard', 'art', 'origin']) if (ch[k]) cfg[k] = ch[k].newValue;
+        redraw = true; tick();
+      });
+      chrome.storage.local.get(['overlayBoard', 'art', 'origin']).then((s) => { cfg = s; tick(); }).catch(() => {});
+    } catch { /* reloaded */ }
     timer = setInterval(tick, 700);
-    tick();
   }
   boardGhost();
 

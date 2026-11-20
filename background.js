@@ -45,7 +45,7 @@ async function poll() {
   try { meta = await (await fetch(BASE + '/api/canvas/meta', { cache: 'no-store' })).json(); }
   catch { return; }
   const open = isOpen(meta);
-  const { wasOpen, enabled, autoOpen = true, art, status, autoTab, reloadAt = 0, night } = await chrome.storage.local.get(['wasOpen', 'enabled', 'autoOpen', 'art', 'status', 'autoTab', 'reloadAt', 'night', 'guard']);
+  const { wasOpen, enabled, autoOpen = true, art, status, autoTab, reloadAt = 0, night } = await chrome.storage.local.get(['wasOpen', 'enabled', 'autoOpen', 'art', 'status', 'autoTab', 'reloadAt', 'night']);
   const guard = (await chrome.storage.local.get('guard')).guard, work = art || (Array.isArray(guard) && guard.length > 0);   // something to paint or protect
   if (!open && wasOpen) nightLog('The canvas closed');
   badge(open, status);
