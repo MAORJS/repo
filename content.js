@@ -146,6 +146,7 @@
         const x = b[k], y = b[k + 1];
         if (x >= 0 && x < W && y >= 0 && y < H) { board[y * W + x] = b[k + 2]; owner.delete(y * W + x); dirty.add(y * W + x); }
       }
+      if (ovCfg) renderOverlay(ovCfg);
     }));
     es.addEventListener('status', json((s) => {
       if (!s || typeof s !== 'object') return;
@@ -290,14 +291,85 @@
     return ms < 60000 ? 'under a minute' : `about ${Math.ceil(ms / 60000)} min`;
   };
 
+  // ---------- on-page preview overlay (visual only; nothing is ever sent anywhere) ----------
+  // A small draggable panel inside the site tab showing the art at your spot, the same picture as the popup's:
+  // full colour = already done, faded = still to paint, red = a pixel that will be replaced. Guarded so it does
+  // nothing when there is no page (the test harness), so it never touches painting.
+  let ovCfg = null, ovEl = null, ovAt = 0;
+  function overlayStates(art, origin, placed) {
+    const st = new Uint8Array(art.w * art.h);
+    for (let y = 0; y < art.h; y++) for (let x = 0; x < art.w; x++) {
+      const k = y * art.w + x, c = art.data[k];
+      if (c < 0) { st[k] = 0; continue; }
+      const bx = origin.x + x, by = origin.y + y;
+      if (!board || bx < 0 || by < 0 || bx >= W || by >= H) { st[k] = 2; continue; }   // no board yet: show as to-paint
+      const i = by * W + bx, cur = board[i];
+      const who = approved && cur !== WHITE ? owner.get(i) : '';
+      const foreign = !!who && !approved.has(who);
+      if (cur === c && !foreign) st[k] = 1;                                 // done
+      else if (foreign) st[k] = 3;                                         // will be replaced
+      else if (cur !== WHITE && !placed.has(i)) st[k] = approved ? 2 : 3;  // someone else's colour
+      else st[k] = 2;                                                      // to paint
+    }
+    return st;
+  }
+  function buildOverlay() {
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;top:12px;left:64px;right:auto;z-index:2147483647;direction:ltr;background:#17112aee;color:#eee;font:12px system-ui,sans-serif;border:1px solid #3a3157;border-radius:8px;padding:6px;box-shadow:0 6px 20px #0008;user-select:none;cursor:grab';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;gap:10px;margin-bottom:4px;align-items:center';
+    const title = document.createElement('span'); title.textContent = '🎨';
+    const close = document.createElement('span'); close.textContent = '✕'; close.style.cssText = 'cursor:pointer;opacity:.7;padding:0 2px';
+    close.onclick = (e) => { e.stopPropagation(); try { chrome.storage.local.set({ overlay: false }); } catch { /* reloaded */ } };
+    row.appendChild(title); row.appendChild(close);
+    const cv = document.createElement('canvas');
+    cv.style.cssText = 'image-rendering:pixelated;display:block;border-radius:4px;background:repeating-conic-gradient(#ccc 0 25%,#fff 0 50%) 0 0/8px 8px';
+    box.appendChild(row); box.appendChild(cv);
+    let dx = 0, dy = 0, down = false;
+    box.addEventListener('pointerdown', (e) => { if (e.target === close) return; down = true; dx = e.clientX - box.offsetLeft; dy = e.clientY - box.offsetTop; box.style.cursor = 'grabbing'; try { box.setPointerCapture(e.pointerId); } catch { /* ok */ } });
+    box.addEventListener('pointermove', (e) => { if (!down) return; box.style.left = (e.clientX - dx) + 'px'; box.style.top = (e.clientY - dy) + 'px'; box.style.right = 'auto'; });
+    box.addEventListener('pointerup', (e) => { down = false; box.style.cursor = 'grab'; try { box.releasePointerCapture(e.pointerId); } catch { /* ok */ } });
+    (document.body || document.documentElement).appendChild(box);
+    box.__cv = cv; box.__title = title;
+    return box;
+  }
+  function renderOverlay(cfg) {
+    if (typeof document === 'undefined' || !(document.body || document.documentElement)) return;
+    const on = cfg && cfg.overlay !== false && cfg.art && cfg.origin;
+    if (!on) { if (ovEl) { ovEl.remove(); ovEl = null; } return; }
+    if (ovEl && Date.now() - ovAt < 350) return;   // throttle redraws
+    ovAt = Date.now();
+    try {
+      const art = cfg.art, origin = cfg.origin;
+      if (!ovEl) ovEl = buildOverlay();
+      const cv = ovEl.__cv, pal = (meta && meta.palette) || [];
+      const st = overlayStates(art, origin, new Set(cfg.placed || []));
+      const rgb = (h) => { const n = parseInt((h || '#ffffff').slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+      const scale = Math.max(1, Math.min(8, Math.floor(Math.min(220 / art.w, 160 / art.h)) || 1));
+      cv.width = art.w; cv.height = art.h;
+      cv.style.width = art.w * scale + 'px'; cv.style.height = art.h * scale + 'px';
+      const ctx = cv.getContext('2d'), img = ctx.createImageData(art.w, art.h);
+      let done = 0, total = 0;
+      art.data.forEach((c, k) => {
+        if (c < 0) return; total++;
+        if (st[k] === 1) done++;
+        if (st[k] === 3) return img.data.set([255, 40, 60, 255], k * 4);
+        const [r, g, b] = rgb(pal[c]);
+        img.data.set([r, g, b, st[k] === 1 ? 255 : 90], k * 4);
+      });
+      ctx.putImageData(img, 0, 0);
+      ovEl.__title.textContent = `🎨 (${origin.x}, ${origin.y}) · ${done}/${total}` + (isOpen(meta) ? '' : ' · closed');
+    } catch { /* the page is in a strange state: skip this frame */ }
+  }
+
   // ---------- the loop ----------
   async function loop() {
     let fails = 0;
     for (;;) {
       if (!alive()) { liveStop(); return; }
       try {
-        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats']);
-        wantOn = !!cfg.enabled;
+        const cfg = await chrome.storage.local.get(['enabled', 'art', 'origin', 'protect', 'placed', 'order', 'team', 'guard', 'autoGuard', 'approved', 'approvedOn', 'night', 'nightStats', 'overlay']);
+        wantOn = !!cfg.enabled; ovCfg = cfg; renderOverlay(cfg);
         if (!cfg.enabled || !cfg.art || !cfg.origin) {
           liveStop();
           status({ state: 'off', msg: cfg.enabled ? 'No art or spot set yet' : 'Bot is off' });
@@ -410,6 +482,7 @@
             save.nightStats = st;
           }
           await chrome.storage.local.set(save);
+          if (ovCfg) renderOverlay(ovCfg);
           status({ state: 'painting', msg: `${isRepair ? 'Repaired' : 'Painted'} (${x}, ${y})`, pool: poolText(), eta: eta(p.todo - (isRepair ? 0 : 1)), ...progress, done: p.right + (isRepair || was === c ? 0 : 1), session: sessionPainted });
           await sleep(GAP);
         } else if (j.waitMs) {
@@ -438,7 +511,7 @@
   }
 
   // start/stop and new settings take effect at once instead of at the next check
-  try { chrome.storage.onChanged.addListener((ch) => { if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard || ch.approved || ch.approvedOn) wake(); }); } catch { /* reloaded */ }
+  try { chrome.storage.onChanged.addListener((ch) => { if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard || ch.approved || ch.approvedOn || ch.overlay) wake(); }); } catch { /* reloaded */ }
 
   // a tab waiting for the lock says so, instead of looking dead
   status({ state: 'waiting', msg: 'Bot loaded in a site tab, starting…' });

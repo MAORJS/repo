@@ -39,12 +39,12 @@
     <legend>1. Your art</legend>
     <div class="row">
       <select id="preset"><option value="">Pick a built-in art…</option></select>
-      <select id="scale"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select>
+      <label>Size <input type="number" id="scale" value="1" min="1" max="16">×</label>
     </div>
     <div class="muted" style="margin:6px 0 4px">or upload your own:</div>
     <input type="file" id="file" accept="image/*">
     <div class="row" style="margin-top:6px">
-      <label>Max size <input type="number" id="maxSize" value="32" min="1" max="200"> px</label>
+      <label>Max size <input type="number" id="maxSize" value="32" min="1" max="500"> px</label>
     </div>
     <canvas id="preview" width="1" height="1"></canvas>
     <div id="bar" hidden><div id="barDone"></div><div id="barBlocked"></div></div>
@@ -69,6 +69,7 @@
     <legend>3. Run</legend>
     <label><input type="checkbox" id="protect" checked> Never paint over other people's pixels</label>
     <label><input type="checkbox" id="autoOpen" checked> Open the site by itself when the canvas opens</label>
+    <label><input type="checkbox" id="overlay" checked> Show a live preview of the art on the canvas page</label>
     <label><input type="checkbox" id="autoGuard" checked> Protect finished arts: repaint them if someone paints over</label>
     <label><input type="checkbox" id="approvedOn" checked> Only approved painters: repaint pixels in my art that anyone else painted, even in the right colour</label>
     <input type="text" id="approved" placeholder="names, separated by commas" style="width:100%;box-sizing:border-box;margin:2px 0 4px;background:#241c3d;color:#fff;border:1px solid #3a3157;border-radius:4px;padding:4px">

@@ -12,7 +12,7 @@ After changing any file: click the reload icon on the extension's card, then ref
 ## Use
 1. Log in on odedsvrmonopoly.app with Kick like you normally do.
 2. Click the extension icon:
-   - **Your art**: pick a built-in art (1×–4× size) or upload a small image. Uploads are shrunk to "Max size" and matched to the site's 32 colors. Transparent pixels are left alone.
+   - **Your art**: pick a built-in art and set its exact size (1×–16×, the pixel count is shown), or upload a small image. Uploads are shrunk to "Max size" and matched to the site's 32 colors. Transparent pixels are left alone.
    - **Your spot**: type the top-left X/Y, or click **Find empty spot** for the closest all-white area with a 2 px gap around it. The popup checks the board there by itself and shows what is already done (full color), still to paint (faded) and someone else's (red), with a progress bar.
    - **Run**: choose a paint order (top to bottom, black outline first, middle outwards, random) and click **Start**.
 3. Leave Chrome running. The pill at the top of the popup shows whether the canvas is open and for how long.
@@ -53,6 +53,9 @@ Tick **Night mode** in **Run** before you go to sleep. It starts the bot and the
 - writes a **Night report** in the popup: pixels painted, repaired and taken back, and what happened at what time.
 
 It can't log in for you: stay logged in on the site and leave Chrome open. Closing a laptop lid usually still puts it to sleep. **Stop** ends night mode.
+
+## On-canvas preview
+With **Show a live preview** on (in **Run**), a small draggable panel appears in the canvas tab showing your art at its spot — full colour for done, faded for still to paint, red for pixels that will be replaced. It is drawn only in your own browser; nothing is sent anywhere, and it does not paint. Drag it by its body, hide it with the ✕ (turn it back on from the popup).
 
 ## Files
 - `background.js`: the 30 s check, notifications, badge, opening/closing the background tab.
