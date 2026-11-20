@@ -182,9 +182,9 @@ $('order').onchange = () => chrome.storage.local.set({ order: $('order').value }
 const ROLE_INFO = {
   all: 'Does everything: paints the art, repairs protected arts, replaces non-approved painters.',
   draw: 'Only paints the art, and keeps it painted. Never spends a pixel on other protected arts or on checking painters.',
-  replace: 'Only repaints pixels that someone not on the approved list painted. Paints nothing else.',
-  defend: 'Repairs anything that was painted over: finished and protected arts, and wrong colours inside an art that is still being painted. Does not fill empty pixels.',
-  protect: 'Only repairs finished things: the arts in the Protected list, and your own art once it has been finished. Leaves an unfinished art alone.',
+  replace: 'Only repaints pixels that someone not on the approved list painted. Paints nothing else. Count only the drawers in "Friends painting".',
+  defend: 'Repairs anything that was painted over: finished and protected arts, and wrong colours inside an art that is still being painted. Does not fill empty pixels. Count only the drawers in "Friends painting".',
+  protect: 'Only repairs finished things: the arts in the Protected list, and your own art once it has been finished. Leaves an unfinished art alone. Count only the drawers in "Friends painting".',
 };
 function drawRole() { $('roleInfo').textContent = ROLE_INFO[$('role').value] || ''; }
 $('role').onchange = () => { chrome.storage.local.set({ role: $('role').value }); drawRole(); };
@@ -211,14 +211,35 @@ async function saveTeam() {
 }
 $('teamSize').onchange = saveTeam; $('teamSlot').onchange = saveTeam;
 const ORDERS = ['rows', 'outline', 'center', 'random'];
-function teamEncode(a, o, size) {
+const bin64 = (b) => { let s = ''; for (let k = 0; k < b.length; k++) s += String.fromCharCode(b[k]); return btoa(s); };
+// one protected art: size and spot (2 bytes each), flags (team size, +128 = a selected area), then the pixels
+function guardEncode(g) {
+  const a = g.art, o = g.origin, b = new Uint8Array(9 + a.data.length);
+  b.set([a.w >> 8, a.w & 255, a.h >> 8, a.h & 255, o.x >> 8, o.x & 255, o.y >> 8, o.y & 255, (g.size || 1) + (g.snap ? 128 : 0)]);
+  a.data.forEach((c, k) => { b[9 + k] = c + 1; });
+  return bin64(b);
+}
+function guardDecode(s) {
+  const b = Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
+  const w = b[0] << 8 | b[1], h = b[2] << 8 | b[3];
+  if (!w || !h || w * h > 250000 || b.length !== 9 + w * h) throw new Error('bad');
+  const art = { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin = { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] };
+  const g = { key: artKey(art, origin), art, origin, size: Math.min(8, Math.max(1, b[8] & 15)), t: Date.now() };
+  if (b[8] & 128) g.snap = true;
+  return g;
+}
+const GUARD_SHARE_MAX = 300000;   // pixels of protected arts one code may carry
+function teamEncode(a, o, size, guards) {
   const b = new Uint8Array(9 + a.data.length);
   b.set([a.w >> 8, a.w & 255, a.h >> 8, a.h & 255, o.x >> 8, o.x & 255, o.y >> 8, o.y & 255, size + 16 * Math.max(0, ORDERS.indexOf($('order').value))]);   // friends + paint order
   a.data.forEach((c, k) => { b[9 + k] = c + 1; });
   let s = ''; b.forEach((v) => { s += String.fromCharCode(v); });
   // third part: the approved painters (with your own name), so the whole team has the same list
   const names = [...new Set([...$('approved').value.split(/[,\s]+/), myKick].map((n) => String(n || '').trim().toLowerCase()).filter(Boolean))];
-  return 'CAB1.' + btoa(s) + '.' + btoa(unescape(encodeURIComponent(names.join(','))));
+  // fourth part: your protected arts, so a teammate who defends or protects has the same list
+  let px = 0; const gs = [];
+  for (const g of guards || []) { px += g.art.w * g.art.h; if (px > GUARD_SHARE_MAX) break; gs.push(guardEncode(g)); }
+  return 'CAB1.' + btoa(s) + '.' + btoa(unescape(encodeURIComponent(names.join(',')))) + (gs.length ? '.' + gs.join(',') : '');
 }
 function teamDecode(code) {
   code = String(code).trim();
@@ -226,19 +247,24 @@ function teamDecode(code) {
   let names = [];
   const parts = code.split('.');
   if (parts[2]) { try { names = decodeURIComponent(escape(atob(parts[2]))).split(',').filter(Boolean); } catch { /* no names */ } }
+  const guards = [];
+  if (parts[3]) for (const g of parts[3].split(',')) { try { guards.push(guardDecode(g)); } catch { /* skip a damaged one */ } }
   code = parts[0] + '.' + parts[1];
   let s; try { s = atob(code.slice(5)); } catch { throw new Error('a damaged team code'); }
   const b = Uint8Array.from(s, (ch) => ch.charCodeAt(0));
   const w = b[0] << 8 | b[1], h = b[2] << 8 | b[3];
   if (!w || !h || w > 500 || h > 500 || b.length !== 9 + w * h) throw new Error('a damaged team code');
   const size = Math.min(8, Math.max(1, b[8] & 15));
-  return { names, order: ORDERS[b[8] >> 4] || 'rows', art: { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin: { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] }, size };
+  return { names, guards, order: ORDERS[b[8] >> 4] || 'rows', art: { w, h, data: Array.from(b.subarray(9), (v) => Math.min(v, PAL.length) - 1) }, origin: { x: b[4] << 8 | b[5], y: b[6] << 8 | b[7] }, size };
 }
 $('teamCopy').onclick = async () => {
   if (!art) return ($('teamInfo').textContent = 'Pick or upload an art first.');
-  const code = teamEncode(art, await saveOrigin(), +$('teamSize').value || 1);
+  const { guard = [] } = await chrome.storage.local.get('guard');
+  const code = teamEncode(art, await saveOrigin(), +$('teamSize').value || 1, guard);
+  const sent = (code.split('.')[3] || '').split(',').filter(Boolean).length;
+  const withG = sent ? ` It also carries ${sent} of your ${guard.length} protected art${guard.length > 1 ? 's' : ''}.` : '';
   $('teamCode').value = code;
-  try { await navigator.clipboard.writeText(code); $('teamInfo').innerHTML = '<span class="good">Copied ✓</span> Send it to your friends.'; }
+  try { await navigator.clipboard.writeText(code); $('teamInfo').innerHTML = '<span class="good">Copied ✓</span> Send it to your friends.' + withG; }
   catch { $('teamInfo').textContent = 'Copy the code from the box and send it to your friends.'; }
 };
 $('teamLoad').onclick = async () => {
@@ -253,9 +279,16 @@ $('teamLoad').onclick = async () => {
     $('approved').value = [...new Set([...$('approved').value.split(/[,\s]+/).map((n) => n.trim().toLowerCase()).filter(Boolean), ...t.names])].join(', ');
     await saveApproved();
   }
+  let added = 0;
+  if (t.guards.length) {   // add the team's protected arts to yours (the ones you don't have yet)
+    const { guard = [] } = await chrome.storage.local.get('guard');
+    for (const g of t.guards) if (!guard.some((x) => x.key === g.key)) { guard.push(g); added++; }
+    if (added) await chrome.storage.local.set({ guard: guard.slice(-30) });
+  }
   await chrome.storage.local.set({ art, origin: t.origin, placed: [], presetId: '', team: { size: t.size, slot }, order: t.order });
   drawTeam({ size: t.size, slot }); drawPreview(); checkSoon();
-  $('teamInfo').innerHTML = `<span class="good">Loaded ✓</span> ${t.art.w}×${t.art.h} at (${t.origin.x}, ${t.origin.y}), ${t.size} friends. Now pick your number: each friend a different one.`;
+  $('teamInfo').innerHTML = `<span class="good">Loaded ✓</span> ${t.art.w}×${t.art.h} at (${t.origin.x}, ${t.origin.y}), ${t.size} friends.${added ? ` Added ${added} protected art${added > 1 ? 's' : ''}.` : ''} Now pick your number: each friend a different one.`;
+  if (added) drawGuard();
 };
 
 // ---------- protected arts: finished arts the bot keeps repairing ----------
@@ -383,7 +416,7 @@ function showStatus(s) {
   $('sBar').hidden = !s.total;
   if (s.total) $('sBarFill').style.width = Math.min(100, s.done / s.total * 100) + '%';
   const pool = s.pool ? `<br>🟪 ${s.pool}` : '';
-  const team = (s.job ? `<br>🎯 Job: ${s.job}` : '') + (s.team ? `<br>👥 ${s.team}` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '') + (s.who ? `<br>🔎 ${s.who}` : '');
+  const team = (s.job ? `<br>🎯 Job: ${s.job}` : '') + (s.team ? `<br>👥 ${s.team}` : '') + (s.shares ? `<br><span class="muted">${s.shares}</span>` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '') + (s.who ? `<br>🔎 ${s.who}` : '');
   const extra = team + (s.state === 'painting' && s.eta ? `<br>Time left: ${s.eta}` : '') + (s.session ? `<br><span class="muted">${s.session} painted since this tab opened</span>` : '');
   $('statusCard').className = 'card ' + (s.state || '');
   if (age > 30) reviveTab();

@@ -37,6 +37,8 @@ The art is split into shares with the same number of pixels. Each bot paints onl
 ## Jobs (optional)
 In the **Team** section each person picks **My job**: *Everything* (default), *Drawer* (only paints the art), *Replacer* (only repaints pixels painted by someone not on the approved list) or *Defender* (repairs anything painted over, also inside an unfinished art) or *Protector* (only repairs finished arts and the Protected list). Each friend still uses their own account. A share that belongs to a Replacer or Defender is painted by the others after about 20 s, so it is quicker to count only the drawers in "Friends painting".
 
+The team code also carries your **protected arts** (up to 300,000 pixels of them) and the approved names, so a friend who loads it defends the same things. The status card shows each friend's share: how many pixels are left and whether that friend is painting.
+
 ## Protected arts (anti-griefing)
 When the bot sees your art complete, it saves the picture and its spot in a list (shown in the popup under **Protected arts**). From then on it keeps checking those spots every few seconds while the canvas is open, and repaints any pixel that someone painted over, before it continues with new art. You can remove an art from the list, or turn the feature off with the checkbox in **Run**.
 

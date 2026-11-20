@@ -203,6 +203,7 @@
     const cx = (art.w - 1) / 2, cy = (art.h - 1) / 2;
     const at = (x, y) => (x < 0 || y < 0 || x >= art.w || y >= art.h ? -1 : art.data[y * art.w + x]);
     const edge = (x, y, c) => at(x - 1, y) !== c || at(x + 1, y) !== c || at(x, y - 1) !== c || at(x, y + 1) !== c;
+    const per = new Array(size).fill(0);       // per share: pixels still to paint
     const head = new Array(size).fill(null);   // per share: its first pixel still to paint
     let rank = -1, waiting = 0;
     if (size > 1 && order === 'random') order = 'rows';   // a team needs an order everyone agrees on
@@ -226,7 +227,7 @@
       const also = !foreign && (guard === 'own' || (!guard && cur !== WHITE)) ? 'defend' : '';
       // a protector only looks after finished things: the protected list, and your own art once it was finished
       if (role !== 'all' && role !== job && role !== also && !(role === 'protect' && guard && !foreign)) { other++; continue; }
-      n++; if (foreign) { retake++; bad.set(who, (bad.get(who) || 0) + 1); }
+      n++; per[share]++; if (foreign) { retake++; bad.set(who, (bad.get(who) || 0) + 1); }
       let score;
       if (order === 'random') score = Math.random();
       else if (order === 'center') score = (x - cx) ** 2 + (y - cy) ** 2;
@@ -259,7 +260,7 @@
       rest.sort((a, b) => a.score - b.score);
       next = rest[rest.length - 1 - Math.floor(slot * rest.length / size)].p;
     }
-    return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad, other };
+    return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad, other, per };
   }
   const wrongSince = new Map(), HELP_DELAY = 8000, DEFEND_DELAY = 1500, HELP_IDLE = 20000;
   // your job: 'all' (default), 'draw' (only paint the art), 'replace' (only repaint pixels by painters who are
@@ -478,6 +479,10 @@
         // "done" shown to you counts every pixel with the right colour, so all teammates see the same number
         const progress = { total: p.total, done: p.right, blocked: p.blocked, session: sessionPainted };
         if (p.size > 1) progress.team = p.mine ? `${p.mine} of your share left` : p.waiting && !p.next ? `Your share is done. Teammates are painting theirs (${p.todo} left); you step in if one stops for 20 s` : p.todo ? `Your share is done, helping a teammate who stopped (${p.todo} left)` : 'All done';
+        if (p.size > 1 && (role === 'all' || role === 'draw')) {   // who in the team is painting, and how much each has left
+          const now = Date.now(), my = Math.min(p.size, Math.max(1, (cfg.team && cfg.team.slot) || 1)) - 1;
+          progress.shares = p.per.map((k, s) => '#' + (s + 1) + (s === my ? ' (you)' : '') + ': ' + (!k ? 'done' : s === my || now - (teamState.seen[s] || teamState.t0) < HELP_IDLE ? k + ' left' : k + ' left, not painting')).join(' · ');
+        }
         const nGuard = guards.length;
         if (role !== 'all') progress.job = JOBS[role] + (otherJobs ? ' · ' + otherJobs + ' px left for the other jobs' : '');
         if (approved) {
