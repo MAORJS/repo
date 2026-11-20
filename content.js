@@ -513,6 +513,86 @@
   // start/stop and new settings take effect at once instead of at the next check
   try { chrome.storage.onChanged.addListener((ch) => { if (ch.enabled || ch.art || ch.origin || ch.protect || ch.order || ch.team || ch.guard || ch.autoGuard || ch.approved || ch.approvedOn || ch.overlay) wake(); }); } catch { /* reloaded */ }
 
+  // ========= board-aligned ghost: draws the art straight onto the site's board, glued to its pan and zoom =========
+  // The board is rendered 1:1 into a <canvas id="cv"> (canvas pixel = board pixel) and panned/zoomed with a CSS
+  // transform on that canvas. We lay our own canvas over it, copy that transform live, and draw the art at its
+  // board coordinates. It reads the board's own pixels to tell done from to-paint, so it works in any tab and
+  // needs neither the paint lock nor the bot to be running. Visual only; it has pointer-events:none and paints nothing.
+  function boardGhost() {
+    if (typeof document === 'undefined') return;   // the test harness has no page
+    let ov = null, view = null, raf = 0, cv = null, timer = 0, loadHook = false, pal = null, palAt = 0, cfg = null;
+    const hex = (h) => { const n = parseInt((h || '#ffffff').slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+    async function palette() {
+      if (pal && Date.now() - palAt < 60000) return pal;
+      try { const m = await (await fetch('/api/canvas/meta', { cache: 'no-store' })).json(); if (m && m.palette) { pal = m.palette; palAt = Date.now(); } } catch { /* keep the old one */ }
+      return pal;
+    }
+    function findCv() {
+      let c = document.getElementById('cv'); if (c) return c;
+      for (const f of document.querySelectorAll('iframe')) { try { const d = f.contentDocument, x = d && d.getElementById('cv'); if (x) return x; } catch { /* cross-origin */ } }
+      return null;
+    }
+    function detach() { if (view && raf) { try { view.cancelAnimationFrame(raf); } catch { /* ok */ } } raf = 0; if (ov) { try { ov.remove(); } catch { /* gone */ } ov = null; } cv = null; view = null; }
+    // Keep the ghost glued to the board every frame, in the iframe's OWN animation frame (so it reads the board's
+    // final transform for the frame, with no lag). Copy the COMPUTED transform and transform-origin — that is
+    // exactly what the board is rendered with, including the pan/zoom, so the overlay lines up to the pixel.
+    function frame() {
+      if (!ov || !cv || !cv.isConnected || ov.ownerDocument !== cv.ownerDocument) { detach(); return; }
+      if (ov.width !== cv.width || ov.height !== cv.height) { ov.width = cv.width; ov.height = cv.height; draw(); }   // board resized (also clears ov)
+      const cs = view.getComputedStyle(cv);
+      ov.style.transform = cs.transform === 'none' ? '' : cs.transform;
+      ov.style.transformOrigin = cs.transformOrigin;
+      ov.style.left = cv.offsetLeft + 'px'; ov.style.top = cv.offsetTop + 'px';
+      ov.style.width = cv.offsetWidth + 'px'; ov.style.height = cv.offsetHeight + 'px';
+      raf = view.requestAnimationFrame(frame);
+    }
+    async function draw() {
+      if (!ov || !cv || !cv.isConnected) return;
+      const octx = ov.getContext('2d');
+      if (!cfg || !cfg.art || !cfg.origin) { octx.clearRect(0, 0, ov.width, ov.height); return; }
+      const p = await palette(); if (!p) return;
+      const art = cfg.art, o = cfg.origin;
+      octx.clearRect(0, 0, ov.width, ov.height);
+      const fits = o.x >= 0 && o.y >= 0 && o.x + art.w <= ov.width && o.y + art.h <= ov.height;
+      let bd = null;
+      if (fits) { try { bd = cv.getContext('2d').getImageData(o.x, o.y, art.w, art.h).data; } catch { /* unreadable */ } }
+      const im = octx.createImageData(art.w, art.h);
+      for (let k = 0; k < art.w * art.h; k++) {
+        const c = art.data[k]; if (c < 0) continue;
+        const x = k % art.w, y = (k / art.w) | 0;
+        if (o.x + x < 0 || o.y + y < 0 || o.x + x >= ov.width || o.y + y >= ov.height) continue;
+        const [r, g, b] = hex(p[c]), j = k * 4;
+        if (bd && Math.abs(bd[j] - r) < 10 && Math.abs(bd[j + 1] - g) < 10 && Math.abs(bd[j + 2] - b) < 10) continue;   // already right: let the board show
+        im.data[j] = r; im.data[j + 1] = g; im.data[j + 2] = b; im.data[j + 3] = 150;   // ~60% ghost
+      }
+      octx.putImageData(im, o.x, o.y);
+      octx.strokeStyle = 'rgba(106,92,255,.9)'; octx.lineWidth = 1;
+      octx.strokeRect(o.x + 0.5, o.y + 0.5, Math.max(1, art.w - 1), Math.max(1, art.h - 1));   // a thin box so the spot is findable
+    }
+    function attach() {
+      const c = findCv(); if (!c) return false;
+      if (c === cv && ov && ov.isConnected) return true;
+      detach(); cv = c; view = cv.ownerDocument.defaultView || window;
+      ov = cv.ownerDocument.createElement('canvas');
+      ov.width = cv.width; ov.height = cv.height;
+      ov.style.cssText = 'position:absolute;pointer-events:none;image-rendering:pixelated;transition:none';   // no transition, so it snaps to the board exactly
+      cv.after(ov);   // above #cv, below #grid and #aim
+      if (!loadHook) { loadHook = true; for (const f of document.querySelectorAll('iframe')) f.addEventListener('load', () => { cv = null; setTimeout(tick, 300); }); }
+      frame(); draw();
+      return true;
+    }
+    async function tick() {
+      if (!alive()) { detach(); if (timer) { clearInterval(timer); timer = 0; } return; }
+      try { cfg = await chrome.storage.local.get(['overlayBoard', 'art', 'origin']); } catch { return; }
+      if (cfg.overlayBoard === false || !cfg.art || !cfg.origin) { detach(); return; }
+      if (!attach()) return;   // no board on this page yet
+      draw();                  // the frame() loop keeps it aligned; this refreshes done/to-paint
+    }
+    timer = setInterval(tick, 700);
+    tick();
+  }
+  boardGhost();
+
   // a tab waiting for the lock says so, instead of looking dead
   status({ state: 'waiting', msg: 'Bot loaded in a site tab, starting…' });
   const run = () => { whoLoop(); return loop(); };

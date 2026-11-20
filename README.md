@@ -54,8 +54,8 @@ Tick **Night mode** in **Run** before you go to sleep. It starts the bot and the
 
 It can't log in for you: stay logged in on the site and leave Chrome open. Closing a laptop lid usually still puts it to sleep. **Stop** ends night mode.
 
-## On-canvas preview
-With **Show a live preview** on (in **Run**), a small draggable panel appears in the canvas tab showing your art at its spot — full colour for done, faded for still to paint, red for pixels that will be replaced. It is drawn only in your own browser; nothing is sent anywhere, and it does not paint. Drag it by its body, hide it with the ✕ (turn it back on from the popup).
+## On-board preview
+With **Show the art on the board** on (in **Run**, on by default), a faded ghost of your art is drawn directly onto the canvas at its exact spot, lined up with the board and following it as you pan and zoom. Pixels already painted correctly are left clear so the real board shows through; the rest are shown at about 60% so you can see what is still to come, with a thin box around the area. It is drawn only in your own browser, paints nothing, and does not block clicking. There is also an optional small preview **panel** in the corner (a draggable copy of the popup's picture) under the second checkbox.
 
 ## Files
 - `background.js`: the 30 s check, notifications, badge, opening/closing the background tab.

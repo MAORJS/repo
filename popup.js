@@ -173,6 +173,7 @@ $('find').onclick = async () => {
 $('protect').onchange = async () => { await chrome.storage.local.set({ protect: $('protect').checked }); checkSoon(); };
 $('autoOpen').onchange = () => chrome.storage.local.set({ autoOpen: $('autoOpen').checked });
 $('overlay').onchange = () => chrome.storage.local.set({ overlay: $('overlay').checked });
+$('overlayBoard').onchange = () => chrome.storage.local.set({ overlayBoard: $('overlayBoard').checked });
 $('order').onchange = () => chrome.storage.local.set({ order: $('order').value });
 $('openSite').onclick = async () => {
   const tabs = await chrome.tabs.query({ url: BASE + '/*' });
@@ -348,7 +349,7 @@ function showStatus(s) {
 chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); if (ch.me) drawMe(ch.me.newValue); if (ch.nightStats || ch.nightLog || ch.night) drawNight(); });
 
 (async () => {
-  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'me', 'overlay']);
+  const s = await chrome.storage.local.get(['art', 'origin', 'protect', 'autoOpen', 'enabled', 'status', 'presetId', 'presetScale', 'order', 'team', 'autoGuard', 'approved', 'approvedOn', 'me', 'overlay', 'overlayBoard']);
   drawMe(s.me);
   drawNight();
   $('approvedOn').checked = s.approvedOn !== false;
@@ -363,7 +364,8 @@ chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.stat
   if (s.origin) { $('ox').value = s.origin.x; $('oy').value = s.origin.y; }
   $('protect').checked = s.protect !== false;
   $('autoOpen').checked = s.autoOpen !== false;
-  $('overlay').checked = s.overlay !== false;
+  $('overlay').checked = s.overlay === true;
+  $('overlayBoard').checked = s.overlayBoard !== false;
   paintToggle(!!s.enabled);
   showStatus(s.status);
   if (art && s.origin) checkProgress();   // show what's already painted at the saved spot
