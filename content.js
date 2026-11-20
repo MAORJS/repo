@@ -206,11 +206,16 @@
     const per = new Array(size).fill(0);       // per share: pixels still to paint
     const head = new Array(size).fill(null);   // per share: its first pixel still to paint
     let rank = -1, waiting = 0;
+    // Shares are solid blocks: the art's pixels, top to bottom, are cut into `size` equal runs, so each friend
+    // fills one band of the picture the way a person would, instead of every N-th pixel (which left stripes).
+    const cnt = pickNext.cnt || (pickNext.cnt = new WeakMap());
+    let count = size > 1 ? cnt.get(art) : 0;
+    if (size > 1 && count === undefined) { count = 0; for (const c of art.data) if (c >= 0) count++; cnt.set(art, count); }
     if (size > 1 && order === 'random') order = 'rows';   // a team needs an order everyone agrees on
     for (let y = 0; y < art.h; y++) for (let x = 0; x < art.w; x++) {
       const c = art.data[y * art.w + x];
       if (c < 0) continue;
-      const share = ++rank % size;   // whose pixel this is
+      const share = size > 1 ? Math.min(size - 1, Math.floor(++rank * size / count)) : 0;   // whose pixel this is
       const bx = origin.x + x, by = origin.y + y;
       if (bx < 0 || by < 0 || bx >= W || by >= H) continue;
       total++;
@@ -238,7 +243,8 @@
         if (!wrongSince.has(i)) wrongSince.set(i, Date.now());
         if (Date.now() - wrongSince.get(i) < (quick() ? DEFEND_DELAY : HELP_DELAY)) continue;
       }
-      if (share !== slot) { rest.push({ score, share, p: { x: bx, y: by, c, i, share } }); continue; }
+      // (sub: which part of that friend's block this pixel is in, so each helper takes a solid part of it)
+      if (share !== slot) { rest.push({ score, share, sub: Math.min(size - 1, Math.floor((rank * size / count - share) * size)), p: { x: bx, y: by, c, i, share } }); continue; }
       mine++;
       if (score < best) { best = score; next = { x: bx, y: by, c, i, share }; }
     }
@@ -258,7 +264,14 @@
     }
     if (!next && rest.length) {
       rest.sort((a, b) => a.score - b.score);
-      next = rest[rest.length - 1 - Math.floor(slot * rest.length / size)].p;
+      // helping a friend who stopped: first the part of their block with your own number, front to back like any
+      // painter, so helpers fill solid pieces and stay out of each other's way; after that, whatever is left
+      // A helper leaves the front pixel of the block for last: that pixel moving is how everyone sees that the
+      // owner is back, so helpers must not move it themselves.
+      const notHead = (r) => !(head[r.share] && head[r.share].i === r.p.i);
+      const part = rest.find((r) => r.sub === slot && notHead(r));
+      const free = rest.filter(notHead), list = free.length ? free : rest;
+      next = (part || list[list.length - 1 - Math.floor(slot * list.length / size)]).p;
     }
     return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad, other, per };
   }
