@@ -220,8 +220,10 @@
       if (cur === c && !foreign) { done++; if (guard) wrongSince.delete(i); continue; }
       if (!foreign && protect && cur !== WHITE && !placed.has(i)) { blocked++; continue; }
       // jobs: every pixel that needs paint is one kind of work, and a member with a job does only that kind
+      // (in your own art a wrong colour that is not empty is also the defender's: it was painted over, whenever that happened)
       const job = foreign ? 'replace' : guard === true ? 'defend' : 'draw';
-      if (role !== 'all' && role !== job && !(guard === 'own' && !foreign && (role === 'draw' || role === 'defend'))) { other++; continue; }
+      const also = !foreign && (guard === 'own' || (!guard && cur !== WHITE)) ? 'defend' : '';
+      if (role !== 'all' && role !== job && role !== also) { other++; continue; }
       n++; if (foreign) { retake++; bad.set(who, (bad.get(who) || 0) + 1); }
       let score;
       if (order === 'random') score = Math.random();
@@ -245,7 +247,7 @@
         if (ts.head[s] !== undefined && ts.head[s] !== h) ts.seen[s] = now;
         ts.head[s] = h;
       }
-      if (!next && !(guard && role === 'defend')) {
+      if (!next && role !== 'defend' && role !== 'replace') {   // a defender or replacer covers the whole art, not only its share
         const free = rest.filter((r) => now - (ts.seen[r.share] || ts.t0) >= HELP_IDLE);
         waiting = rest.length - free.length;
         rest.length = 0; rest.push(...free);
@@ -279,6 +281,7 @@
       if (approved && board && isOpen(meta) && (id === 0 || role === 'replace')) {
         const ok = (k) => board[k] !== WHITE && !owner.has(k) && !asking.has(k);
         while (hot.length && i < 0) { const k = hot.pop(); if (watchSet.has(k) && ok(k)) i = k; }
+        if (i < 0) for (const k of watch) if (board[k] !== want.get(k) && ok(k)) { i = k; break; }
         if (i < 0) for (const k of watch) if (ok(k)) { i = k; break; }
       }
       if (i < 0) { await sleep(id ? 1000 : 400); continue; }
@@ -301,16 +304,17 @@
   // It only ever ADDS names, and only names already painting your art correctly, so it can't cause extra repainting.
   function learnTeammates(appr, a, o, size) {
     if (!appr || size < 2 || !board) return [];
-    const tally = new Map();
+    const tally = new Map(), wrong = new Map();
     for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
       const c = a.data[y * a.w + x]; if (c < 0) continue;
       const bx = o.x + x, by = o.y + y; if (bx < 0 || by < 0 || bx >= W || by >= H) continue;
-      const i = by * W + bx; if (board[i] !== c) continue;             // only correct pixels
+      const i = by * W + bx; if (board[i] === WHITE) continue;
       const w = owner.get(i); if (!w || appr.has(w)) continue;         // unknown yet, or already approved
-      tally.set(w, (tally.get(w) || 0) + 1);
+      if (board[i] === c) tally.set(w, (tally.get(w) || 0) + 1);       // a correct pixel
+      else wrong.set(w, (wrong.get(w) || 0) + 1);                      // a wrong one: counts against them
     }
     const learned = [];
-    for (const [w, k] of tally) if (k >= TEAM_LEARN) { appr.add(w); learned.push(w); }
+    for (const [w, k] of tally) if (k >= TEAM_LEARN && k >= 3 * (wrong.get(w) || 0)) { appr.add(w); learned.push(w); }
     return learned;
   }
   const footprint = (list, a, o) => {
@@ -473,7 +477,7 @@
         }
         const tsKey = curKey + '|' + JSON.stringify(cfg.team || 0) + '|' + cfg.order;
         if (!teamState || teamState.key !== tsKey) teamState = { key: tsKey, t0: Date.now(), head: [], seen: [] };
-        const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false && !guarded, placed, cfg.order, cfg.team, guarded ? 'own' : false, teamState);
+        const p = pickNext(cfg.art, cfg.origin, cfg.protect !== false && !guarded && role !== 'defend', placed, cfg.order, cfg.team, guarded ? 'own' : false, teamState);
         otherJobs += p.other;
         // "done" shown to you counts every pixel with the right colour, so all teammates see the same number
         const progress = { total: p.total, done: p.right, blocked: p.blocked, session: sessionPainted };
