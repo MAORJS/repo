@@ -14,7 +14,7 @@ After changing any file: click the reload icon on the extension's card, then ref
 2. Click the extension icon:
    - **Your art**: pick a built-in art and set its exact size (1×–16×, the pixel count is shown), or upload a small image. Uploads are shrunk to "Max size" and matched to the site's 32 colors. Transparent pixels are left alone.
    - **Your spot**: type the top-left X/Y, or click **Find empty spot** for the closest all-white area with a 2 px gap around it. The popup checks the board there by itself and shows what is already done (full color), still to paint (faded) and someone else's (red), with a progress bar.
-   - **Run**: choose a paint order (top to bottom, black outline first, middle outwards, random) and click **Start**.
+   - Press **Start painting** in the card at the top. The other sections (Options, Approved painters, Team, Protected arts) fold away; click a title to open it. **Options** has the paint order: top to bottom, outline first (black lines, then every edge, then the fill), middle outwards, random.
 3. Leave Chrome running. The pill at the top of the popup shows whether the canvas is open and for how long.
 
 ## What it does by itself

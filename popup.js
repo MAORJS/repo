@@ -18,6 +18,9 @@ async function loadMeta() {
 }
 async function loadBoard() { return new Uint8Array(await (await fetch(BASE + '/api/canvas', { cache: 'no-store' })).arrayBuffer()); }
 
+// how long n pixels take: you start with up to 10 saved, then one every 5 s
+const dur = (n) => { const s = Math.max(0, n - 10) * 5; if (s < 60) return 'under a minute'; const m = Math.ceil(s / 60); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60 ? (m % 60) + ' min' : ''); };
+const hint = (id, text) => { $(id).textContent = text || ''; };
 function drawPreview(states) {
   const cv = $('preview');
   if (!art) { cv.width = cv.height = 1; return; }
@@ -34,7 +37,8 @@ function drawPreview(states) {
   });
   ctx.putImageData(img, 0, 0);
   const n = art.data.filter((c) => c >= 0).length;
-  $('artInfo').textContent = `${art.w}×${art.h}, ${n} pixels ≈ ${Math.max(1, Math.ceil(Math.max(0, n - 10) * 5 / 60))} min to paint`;
+  $('artInfo').textContent = `${art.w}×${art.h}, ${n} pixels ≈ ${dur(n)} to paint`;
+  hint('artHint', `${art.w}×${art.h} · ${n} px`);
 }
 
 // image → palette indices, shrunk to fit "max size" (nearest-neighbour, keeps pixel art crisp)
@@ -77,6 +81,7 @@ async function saveOrigin() {
   const origin = { x: Math.min(W - 1, Math.max(0, Math.floor(+$('ox').value || 0))), y: Math.min(H - 1, Math.max(0, Math.floor(+$('oy').value || 0))) };
   const old = (await chrome.storage.local.get('origin')).origin;
   if (!old || old.x !== origin.x || old.y !== origin.y) await chrome.storage.local.set({ origin, placed: [] });
+  hint('spotHint', `(${origin.x}, ${origin.y})`);
   return origin;
 }
 $('ox').onchange = saveOrigin; $('oy').onchange = saveOrigin;
@@ -123,9 +128,8 @@ async function checkProgress(quiet) {
     share = `<br>👥 Your share (number ${team.slot} of ${team.size}): <b>${left}</b> left`;
   }
   const total = done + todo + blocked, pct = total ? Math.round(done / total * 100) : 0;
-  const mins = Math.ceil(Math.max(0, todo - 10) * 5 / 60);
   let html = `<b>${done}/${total}</b> already done (${pct}%)`;
-  html += todo ? `, <b>${todo}</b> left ≈ ${todo <= 10 ? 'under a minute' : mins + ' min'}` : ' <span class="good">✓ nothing left to paint</span>';
+  html += todo ? `, <b>${todo}</b> left ≈ ${dur(todo)}` : ' <span class="good">✓ nothing left to paint</span>';
   if (blocked) html += `<br><span class="bad">${blocked} pixels are someone else's</span> (red in the preview). ${$('approvedOn').checked ? 'The bot replaces the ones not painted by an approved name.' : 'Skipped.'} Try "Find empty spot".`;
   else if (!done) html += `<br><span class="good">Spot is free ✓</span>`;
   $('area').innerHTML = html + share;
@@ -189,6 +193,7 @@ function drawTeam(t) {
   $('teamSlot').innerHTML = Array.from({ length: size }, (_, k) => `<option>${k + 1}</option>`).join('');
   $('teamSlot').value = String(slot);
   $('teamSlot').disabled = size < 2;
+  hint('teamHint', size > 1 ? `number ${slot} of ${size}` : 'off');
 }
 async function saveTeam() {
   const size = +$('teamSize').value || 1, slot = Math.min(size, +$('teamSlot').value || 1);
@@ -248,6 +253,7 @@ $('teamLoad').onclick = async () => {
 const artKey = (a, o) => { let h = 2166136261; for (const c of a.data) h = Math.imul(h ^ (c + 1), 16777619) >>> 0; return [o.x, o.y, a.w, a.h, h].join(','); };
 async function drawGuard() {
   const { guard = [] } = await chrome.storage.local.get('guard');
+  hint('guardHint', guard.length ? String(guard.length) : 'none');
   if (!guard.length) return ($('guardList').textContent = 'None yet. An art is added here by itself when it is finished.');
   $('guardList').innerHTML = guard.map((g, k) => `<div class="row" style="justify-content:space-between;margin:2px 0"><span>${g.art.w}×${g.art.h} at (${g.origin.x}, ${g.origin.y})${g.size > 1 ? ', team of ' + g.size : ''}</span><button class="sec" data-k="${k}" style="padding:2px 8px">Remove</button></div>`).join('') +
     '<div style="margin-top:4px">In a team, every friend\'s bot adds the art when it sees it finished, and repairs its own share first.</div>';
@@ -260,10 +266,11 @@ async function drawGuard() {
 const DEFAULT_APPROVED = ['kgsx', 'ksgxl', 'kgsxs'];
 let myKick = '';   // your name on the site, as the painter last saw it
 function drawMe(n) { myKick = n || ''; $('meName').textContent = myKick ? `You are painting as: ${myKick}. Teammates need this exact name on their list.` : ''; }
-const saveApproved = () => chrome.storage.local.set({
+const approvedHint = () => hint('approvedHint', $('approvedOn').checked ? $('approved').value.split(/[,\s]+/).filter(Boolean).length + ' names' : 'off');
+const saveApproved = () => (approvedHint(), chrome.storage.local.set({
   approvedOn: $('approvedOn').checked,
   approved: $('approved').value.split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean),
-});
+}));
 $('approvedOn').onchange = saveApproved; $('approved').onchange = saveApproved;
 $('autoGuard').onchange = () => chrome.storage.local.set({ autoGuard: $('autoGuard').checked });
 
@@ -309,7 +316,7 @@ setInterval(drawCanvasState, 1000);
 setInterval(refreshCanvasState, 15000);
 
 async function paintToggle(enabled) {
-  $('toggle').textContent = enabled ? 'Stop' : 'Start';
+  $('toggle').textContent = enabled ? 'Stop' : 'Start painting';
   $('toggle').className = enabled ? 'stop' : '';
 }
 $('toggle').onclick = async () => {
@@ -334,17 +341,19 @@ async function reviveTab() {
   else chrome.tabs.create({ url: BASE + '/canvas', active: false });
 }
 function showStatus(s) {
-  if (!s) return ($('status').textContent = 'Open odedsvrmonopoly.app in a tab, the bot runs there.');
+  if (!s) { $('sBar').hidden = true; return ($('status').textContent = 'Pick an art and a spot, then press Start. The bot runs in the site tab.'); }
   const age = Math.round((Date.now() - s.t) / 1000);
-  const prog = s.total ? `<br><b>${s.done}/${s.total}</b> pixels done${s.blocked ? `, ${s.blocked} skipped (someone else's)` : ''}` : '';
+  const prog = s.total ? `<br><b>${Math.floor(s.done / s.total * 100)}%</b> · ${s.done}/${s.total} pixels${s.blocked ? `, ${s.blocked} skipped (someone else's)` : ''}` : '';
+  $('sBar').hidden = !s.total;
+  if (s.total) $('sBarFill').style.width = Math.min(100, s.done / s.total * 100) + '%';
   const pool = s.pool ? `<br>🟪 ${s.pool}` : '';
   const team = (s.team ? `<br>👥 ${s.team}` : '') + (s.guard ? `<br>🛡️ ${s.guard}` : '') + (s.who ? `<br>🔎 ${s.who}` : '');
   const extra = team + (s.state === 'painting' && s.eta ? `<br>Time left: ${s.eta}` : '') + (s.session ? `<br><span class="muted">${s.session} painted since this tab opened</span>` : '');
-  $('status').className = s.state || '';
+  $('statusCard').className = 'card ' + (s.state || '');
   if (age > 30) reviveTab();
   // keep the preview in step with the bot while it paints
   if (s.state === 'painting' && art && Date.now() - lastCheck > 5000) checkProgress(true);
-  $('status').innerHTML = `${s.msg}${pool}${prog}${extra}<br><span class="muted">${age > 30 ? `last update ${age}s ago. If the bot is on, the site tab is refreshed by itself.` : ''}</span>`;
+  $('status').innerHTML = `${s.msg}${prog}${pool}${extra}` + (age > 30 ? `<br><span class="muted">last update ${age}s ago. If the bot is on, the site tab is refreshed by itself.</span>` : '');
 }
 chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.status.newValue); if (ch.guard) drawGuard(); if (ch.me) drawMe(ch.me.newValue); if (ch.nightStats || ch.nightLog || ch.night) drawNight(); });
 
@@ -368,5 +377,15 @@ chrome.storage.onChanged.addListener((ch) => { if (ch.status) showStatus(ch.stat
   $('overlayBoard').checked = s.overlayBoard !== false;
   paintToggle(!!s.enabled);
   showStatus(s.status);
+  approvedHint();
+  if (s.origin) hint('spotHint', `(${s.origin.x}, ${s.origin.y})`);
+  // sections remember whether you left them open; with art and spot set, they start folded
+  const { ui = {} } = await chrome.storage.local.get('ui');
+  const ready = !!(s.art && s.origin);
+  for (const id of ['secArt', 'secSpot', 'secOpts', 'secApproved', 'secTeam', 'secGuard']) {
+    const dflt = id === 'secArt' || id === 'secSpot' ? !ready : false;
+    $(id).open = id in ui ? !!ui[id] : dflt;
+    $(id).ontoggle = async () => { const { ui: u = {} } = await chrome.storage.local.get('ui'); u[id] = !!$(id).open; chrome.storage.local.set({ ui: u }); };
+  }
   if (art && s.origin) checkProgress();   // show what's already painted at the saved spot
 })();

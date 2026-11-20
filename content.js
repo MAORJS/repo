@@ -191,6 +191,8 @@
     const rest = [];   // pixels of other members' shares that are still to paint
     const size = team && team.size > 1 ? team.size : 1, slot = size > 1 ? Math.min(size, Math.max(1, team.slot || 1)) - 1 : 0;
     const cx = (art.w - 1) / 2, cy = (art.h - 1) / 2;
+    const at = (x, y) => (x < 0 || y < 0 || x >= art.w || y >= art.h ? -1 : art.data[y * art.w + x]);
+    const edge = (x, y, c) => at(x - 1, y) !== c || at(x + 1, y) !== c || at(x, y - 1) !== c || at(x, y + 1) !== c;
     const head = new Array(size).fill(null);   // per share: its first pixel still to paint
     let rank = -1, waiting = 0;
     if (size > 1 && order === 'random') order = 'rows';   // a team needs an order everyone agrees on
@@ -212,7 +214,7 @@
       let score;
       if (order === 'random') score = Math.random();
       else if (order === 'center') score = (x - cx) ** 2 + (y - cy) ** 2;
-      else if (order === 'outline') score = (c === 27 ? 0 : 1e6) + y * art.w + x;   // black lines first
+      else if (order === 'outline') score = (c === 27 ? 0 : edge(x, y, c) ? 1e6 : 2e6) + y * art.w + x;   // black lines, then every edge, then the fill
       else score = y * art.w + x;                                                   // top to bottom
       if (!head[share] || score < head[share].score) head[share] = { score, i };
       if (guard && share !== slot) {   // a griefed pixel of a teammate's share: let them go first
@@ -286,9 +288,12 @@
       if (a.data[y * a.w + x] >= 0 && bx >= 0 && by >= 0 && bx < W && by < H) list.push(by * W + bx);
     }
   };
+  const left = (p) => (p.size > 1 && p.mine ? p.mine : p.todo);   // in a team, your own share is what you wait for
   const eta = (todo) => {
     const ms = Math.max(0, todo - (pool.charges || 0)) * pool.period;
-    return ms < 60000 ? 'under a minute' : `about ${Math.ceil(ms / 60000)} min`;
+    if (ms < 60000) return 'under a minute';
+    const m = Math.ceil(ms / 60000);
+    return m < 60 ? `about ${m} min` : `about ${Math.floor(m / 60)} h ${m % 60} min`;
   };
 
   // ---------- on-page preview overlay (visual only; nothing is ever sent anywhere) ----------
@@ -450,7 +455,7 @@
         if (pool.charges === null) pool.charges = 1;   // couldn't ask: try one, the server's answer sets the real count
         const wait = poolWait();
         if (wait > 0) {
-          status({ state: 'painting', msg: `Out of pixels, next one in ${Math.ceil(wait / 1000)} s`, pool: poolText(), eta: eta(p.todo), ...progress });
+          status({ state: 'painting', msg: `Out of pixels, next one in ${Math.ceil(wait / 1000)} s`, pool: poolText(), eta: eta(left(p)), ...progress });
           await sleep(wait + EDGE);
           continue;
         }
@@ -483,12 +488,12 @@
           }
           await chrome.storage.local.set(save);
           if (ovCfg) renderOverlay(ovCfg);
-          status({ state: 'painting', msg: `${isRepair ? 'Repaired' : 'Painted'} (${x}, ${y})`, pool: poolText(), eta: eta(p.todo - (isRepair ? 0 : 1)), ...progress, done: p.right + (isRepair || was === c ? 0 : 1), session: sessionPainted });
+          status({ state: 'painting', msg: `${isRepair ? 'Repaired' : 'Painted'} (${x}, ${y})`, pool: poolText(), eta: eta(left(p) - (isRepair ? 0 : 1)), ...progress, done: p.right + (isRepair || was === c ? 0 : 1), session: sessionPainted });
           await sleep(GAP);
         } else if (j.waitMs) {
           syncPool(j);
           if (pool.charges > 0) { pool.charges = 0; pool.nextAt = Date.now() + j.waitMs; }
-          status({ state: 'painting', msg: `Out of pixels, next one in ${Math.ceil(j.waitMs / 1000)} s`, pool: poolText(), eta: eta(p.todo), ...progress });
+          status({ state: 'painting', msg: `Out of pixels, next one in ${Math.ceil(j.waitMs / 1000)} s`, pool: poolText(), eta: eta(left(p)), ...progress });
           await sleep(j.waitMs + EDGE);
         } else if (j.login) {
           myName = ''; nameAt = 0;
