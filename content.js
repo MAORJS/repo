@@ -41,7 +41,7 @@
   let board = null, boardAt = 0, meta = null, metaAt = 0, clock = 0;   // clock: server time − my time
   let myName = '', nameAt = 0, sessionPainted = 0;
   let netFails = 0, wantOn = false;   // failed requests in a row; is the bot switched on
-  const WHO_GAP = 250;                // pause between "who painted this pixel" questions
+  const WHO_GAP = 250, WHO_GAP_FAST = 110;                // pause between "who painted this pixel" questions
   const DEFAULT_APPROVED = ['kgsx', 'ksgxl', 'kgsxs'];
   const serverNow = () => Date.now() + clock;
   const isOpen = (m) => !!m && !!m.open && (m.paused != null || m.openUntil > serverNow());
@@ -144,8 +144,17 @@
       if (!board || !Array.isArray(b)) return;
       for (let k = 0; k + 2 < b.length; k += 3) {
         const x = b[k], y = b[k + 1];
-        if (x >= 0 && x < W && y >= 0 && y < H) { board[y * W + x] = b[k + 2]; owner.delete(y * W + x); dirty.add(y * W + x); }
+        if (!(x >= 0 && x < W && y >= 0 && y < H)) continue;
+        const i = y * W + x, c = b[k + 2], m = minePx.get(i);
+        board[i] = c;
+        if (m && m.c === c && Date.now() - m.t < 3000) { minePx.delete(i); continue; }   // the echo of my own pixel: I know who painted it
+        owner.delete(i); dirty.add(i);
+        if (want.has(i)) {
+          if (watchSet.has(i)) hot.push(i);      // ask who painted this one before the rest
+          if (want.get(i) !== c) urgent = true;  // a pixel of an art we look after just went wrong
+        }
       }
+      if (urgent) { urgent = false; wake(); }   // repair at once instead of at the next look
       if (ovCfg) renderOverlay(ovCfg);
     }));
     es.addEventListener('status', json((s) => {
@@ -222,7 +231,7 @@
       if (!head[share] || score < head[share].score) head[share] = { score, i };
       if (guard && share !== slot) {   // a griefed pixel of a teammate's share: let them go first
         if (!wrongSince.has(i)) wrongSince.set(i, Date.now());
-        if (Date.now() - wrongSince.get(i) < HELP_DELAY) continue;
+        if (Date.now() - wrongSince.get(i) < (role === 'defend' ? DEFEND_DELAY : HELP_DELAY)) continue;
       }
       if (share !== slot) { rest.push({ score, share, p: { x: bx, y: by, c, i, share } }); continue; }
       mine++;
@@ -236,7 +245,7 @@
         if (ts.head[s] !== undefined && ts.head[s] !== h) ts.seen[s] = now;
         ts.head[s] = h;
       }
-      if (!next) {
+      if (!next && !(guard && role === 'defend')) {
         const free = rest.filter((r) => now - (ts.seen[r.share] || ts.t0) >= HELP_IDLE);
         waiting = rest.length - free.length;
         rest.length = 0; rest.push(...free);
@@ -248,7 +257,7 @@
     }
     return { next, total, done, blocked, todo: n, mine, size, retake, waiting, right, bad, other };
   }
-  const wrongSince = new Map(), HELP_DELAY = 8000, HELP_IDLE = 20000, TEAM_LEARN = 3;
+  const wrongSince = new Map(), HELP_DELAY = 8000, DEFEND_DELAY = 1500, HELP_IDLE = 20000, TEAM_LEARN = 3;
   // your job: 'all' (default), 'draw' (only paint the art), 'replace' (only repaint pixels by painters who are
   // not approved), 'defend' (only repair protected arts that were painted over)
   let role = 'all';
@@ -256,20 +265,35 @@
   let teamState = null;   // per share: finished pixels at the last look, and when it last grew
   // approved painters: null = feature off, else the lower-case names whose pixels are left alone
   let approved = null, watch = [];
+  // want: board index -> the colour it should have (your art + everything protected); watchSet: the ones whose painter matters
+  let want = new Map(), watchSet = new Set(), watchAll = [], urgent = false;
+  const wantSrc = { heavy: null, o: '' }, hot = [], asking = new Set(), minePx = new Map();
   const owner = new Map(), dirty = new Set();   // board index -> who painted it ('' = nobody)
   // asks the site, one pixel at a time, who painted the pixels of your arts
-  async function whoLoop() {
+  // Pixels that just changed are asked first (that is where a griefer is). The second asker (id 1) only works
+  // for a replacer, whose whole job this is; it also asks faster.
+  async function whoLoop(id) {
     for (;;) {
       if (!alive()) return;
       let i = -1;
-      if (approved && board && isOpen(meta)) for (const k of watch) if (board[k] !== WHITE && !owner.has(k)) { i = k; break; }
-      if (i < 0) { await sleep(1500); continue; }
+      if (approved && board && isOpen(meta) && (id === 0 || role === 'replace')) {
+        const ok = (k) => board[k] !== WHITE && !owner.has(k) && !asking.has(k);
+        while (hot.length && i < 0) { const k = hot.pop(); if (watchSet.has(k) && ok(k)) i = k; }
+        if (i < 0) for (const k of watch) if (ok(k)) { i = k; break; }
+      }
+      if (i < 0) { await sleep(id ? 1000 : 400); continue; }
+      asking.add(i);
       try {
         dirty.delete(i);
         const j = await (await fetch('/api/canvas/who?x=' + (i % W) + '&y=' + Math.floor(i / W), { cache: 'no-store' })).json();
-        if (!dirty.has(i)) owner.set(i, String(j.name || '').toLowerCase());   // repainted meanwhile: ask again
-        await sleep(WHO_GAP);
-      } catch { await sleep(5000); }
+        asking.delete(i);
+        if (!dirty.has(i)) {   // (repainted meanwhile: ask again)
+          const nm = String(j.name || '').toLowerCase();
+          owner.set(i, nm);
+          if (nm && approved && !approved.has(nm)) wake();   // found one to replace: do it now
+        }
+        await sleep(role === 'replace' ? WHO_GAP_FAST : WHO_GAP);
+      } catch { asking.delete(i); await sleep(5000); }
     }
   }
   // Team without hand-syncing lists: anyone who has painted TEAM_LEARN+ pixels of the shared art in the
@@ -424,18 +448,25 @@
           const me = (await getName()).toLowerCase();
           approved = new Set((Array.isArray(cfg.approved) ? cfg.approved : DEFAULT_APPROVED).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
           if (me) approved.add(me);
-          const list = [];
-          footprint(list, cfg.art, cfg.origin);
-          for (const g of guards) if (!g.snap) footprint(list, g.art, g.origin);
-          watch = list;
         }
+        const wk = [cfg.origin.x, cfg.origin.y, W, H, hasArt].join(',');
+        if (wantSrc.heavy !== heavy || wantSrc.o !== wk) {
+          wantSrc.heavy = heavy; wantSrc.o = wk;
+          const list = [], w2 = new Map();
+          const add = (a, o) => { for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) { const c = a.data[y * a.w + x], bx = o.x + x, by = o.y + y; if (c >= 0 && bx >= 0 && by >= 0 && bx < W && by < H) w2.set(by * W + bx, c); } };
+          footprint(list, cfg.art, cfg.origin);   // your own art is asked about first
+          for (const g of guards) { add(g.art, g.origin); if (!g.snap) footprint(list, g.art, g.origin); }
+          add(cfg.art, cfg.origin);
+          want = w2; watchAll = list; watchSet = new Set(list);
+        }
+        watch = approved ? watchAll : [];
         const learned = approved ? learnTeammates(approved, cfg.art, cfg.origin, cfg.team && cfg.team.size || 1) : [];
         const guarded = guards.some((g) => g.key === curKey);
         let repair = null, repairLeft = 0, otherJobs = 0;
         for (const g of guards) {
           if (g.key === curKey || overlaps(g, cfg.art, cfg.origin)) continue;   // the current art handles its own spot
           const keepApproved = approved; if (g.snap) approved = null;   // a selected area keeps whoever painted it
-          const gp = pickNext(g.art, g.origin, false, NONE, 'rows', { size: g.size || 1, slot: (cfg.team && cfg.team.slot) || 1 }, true);
+          const gp = pickNext(g.art, g.origin, false, NONE, 'outline', { size: g.size || 1, slot: (cfg.team && cfg.team.slot) || 1 }, true);
           approved = keepApproved;
           repairLeft += gp.todo; otherJobs += gp.other;
           if (!repair && gp.next) repair = gp.next;
@@ -468,7 +499,7 @@
         }
         if (!p.next && !repair && (p.todo || repairLeft)) {
           status({ state: 'painting', ...progress, pool: poolText(), msg: 'Someone painted over a protected art. Giving the teammate who owns that pixel a few seconds to repair it first…' });
-          await sleep(3000, true); continue;
+          await sleep(role === 'defend' ? 500 : 3000, true); continue;
         }
         if (!p.next && !repair) {
           status({
@@ -510,7 +541,8 @@
         if (j.ok) {
           fails = 0; sessionPainted++; lastRepair = isRepair;
           if (board) board[i] = c;
-          owner.set(i, name.toLowerCase());
+          owner.set(i, name.toLowerCase()); minePx.set(i, { c, t: Date.now() });
+          if (minePx.size > 500) minePx.clear();
           if (!isRepair) placed.add(i);
           pool.charges = Math.max(0, pool.charges - 1);   // spent one (the answer below corrects it)
           syncPool(j);
@@ -740,7 +772,7 @@
 
   // a tab waiting for the lock says so, instead of looking dead
   status({ state: 'waiting', msg: 'Bot loaded in a site tab, starting…' });
-  const run = () => { whoLoop(); return loop(); };
+  const run = () => { whoLoop(0); whoLoop(1); return loop(); };
   if (navigator.locks) navigator.locks.request('odedsvr-artbot', run);
   else run();
 })();
