@@ -123,10 +123,9 @@ async function checkProgress(quiet) {
   let share = '';
   if (team && team.size > 1) {
     let left = 0;
-    let rank = -1, count = 0;   // same dealing as the painter: the art's pixels are cut into equal blocks, one per friend
-    for (const c of art.data) if (c >= 0) count++;
-    states.forEach((st, k) => { if (art.data[k] < 0) return; rank++; if (st === 'todo' && Math.min(team.size - 1, Math.floor(rank * team.size / count)) === team.slot - 1) left++; });
-    share = `<br>👥 Your share (number ${team.slot} of ${team.size}): <b>${left}</b> left`;
+    let T = 0; states.forEach((st, k) => { if (art.data[k] >= 0 && st === 'todo') T++; });   // same as the painter: what is left is split equally
+    left = Math.floor(team.slot * T / team.size) - Math.floor((team.slot - 1) * T / team.size);
+    share = `<br>👥 Your part right now (number ${team.slot} of ${team.size}): <b>${left}</b> left`;
   }
   const total = done + todo + blocked, pct = total ? Math.round(done / total * 100) : 0;
   let html = `<b>${done}/${total}</b> already done (${pct}%)`;

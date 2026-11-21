@@ -187,10 +187,11 @@
   // ---------- which pixel next ----------
   // Every art pixel is: done (right colour already), blocked (someone else's colour, skipped while
   // "protect" is on) or still to paint. `order` picks among the ones still to paint.
-  // Team: with N friends, the art is cut into N equal solid blocks (top to bottom), one per friend. Everyone
-  // paints their own block first, in the paint order. A friend whose block is finished helps at once with the
-  // block that has the most left: the owner works from the front of the order, helpers from the back (each
-  // helper a different pixel), so they meet in the middle instead of painting the same pixels.
+  // Team: with N friends, the pixels that are STILL TO PAINT (top to bottom) are cut into N equal runs, one per
+  // friend, and cut again every time the board changes. So everyone always has the same amount left, a friend who
+  // is ahead takes over work from one who is behind by itself, and a friend who is away just leaves less for the
+  // others to pick up. Each friend paints inside their own run, in the paint order.
+  // (Repairs of a finished art keep fixed blocks: there the owner of a pixel repairs it and the others wait a moment.)
   // Paint order 'inward' (the default): the outline of the picture first, then ring by ring towards the inside,
   // each ring traced around like a person would draw it.
   function pickNext(art, origin, protect, placed, order, team, guard, ts) {
@@ -220,6 +221,7 @@
         memo.set(art, inw);
       }
     }
+    const dyn = size > 1 && !guard, cand = [];   // drawing in a team: split what is left (see above)
     const per = new Array(size).fill(0);       // per share: pixels still to paint
     const head = new Array(size).fill(null);   // per share: its first pixel still to paint
     let rank = -1, waiting = 0;
@@ -256,6 +258,7 @@
       else if (order === 'center') score = (x - cx) ** 2 + (y - cy) ** 2;
       else if (order === 'outline') score = (c === 27 ? 0 : edge(x, y, c) ? 1e6 : 2e6) + y * art.w + x;   // black lines, then every edge, then the fill
       else score = y * art.w + x;                                                   // top to bottom
+      if (dyn) { cand.push({ score, i, x: bx, y: by, c }); continue; }
       if (!head[share] || score < head[share].score) head[share] = { score, i };
       if (guard && share !== slot) {   // a griefed pixel of a teammate's share: let them go first
         if (!wrongSince.has(i)) wrongSince.set(i, Date.now());
@@ -273,6 +276,14 @@
         if (ts.head[s] !== undefined && ts.head[s] !== h) ts.seen[s] = now;
         ts.head[s] = h;
       }
+    }
+    if (dyn && cand.length) {
+      const T = cand.length, lo = Math.floor(slot * T / size), hi = Math.floor((slot + 1) * T / size);
+      let pick = null;
+      for (let k = lo; k < hi; k++) if (!pick || cand[k].score < pick.score) pick = cand[k];
+      mine = hi - lo;
+      if (!pick) pick = cand[slot % T];   // fewer pixels left than friends: still take one
+      next = { x: pick.x, y: pick.y, c: pick.c, i: pick.i, share: slot };
     }
     if (!next && rest.length) {
       // your own block is finished: help at once with the block that has the most left, from the back of the
@@ -516,11 +527,7 @@
         otherJobs += p.other;
         // "done" shown to you counts every pixel with the right colour, so all teammates see the same number
         const progress = { total: p.total, done: p.right, blocked: p.blocked, session: sessionPainted };
-        if (p.size > 1) progress.team = p.mine ? `${p.mine} of your share left` : p.waiting && !p.next ? `Your share is done (${p.todo} left for teammates)` : p.todo ? `Your share is done, helping the friend with the most left (${p.todo} left in all)` : 'All done';
-        if (p.size > 1 && (role === 'all' || role === 'draw')) {   // who in the team is painting, and how much each has left
-          const now = Date.now(), my = Math.min(p.size, Math.max(1, (cfg.team && cfg.team.slot) || 1)) - 1;
-          progress.shares = p.per.map((k, s) => '#' + (s + 1) + (s === my ? ' (you)' : '') + ': ' + (!k ? 'done' : s === my || now - (teamState.seen[s] || teamState.t0) < HELP_IDLE ? k + ' left' : k + ' left, not painting')).join(' · ');
-        }
+        if (p.size > 1) progress.team = p.todo ? `${p.todo} left in all, split equally: ${Math.max(1, p.mine)} for you` : 'All done';
         const nGuard = guards.length;
         if (role !== 'all') progress.job = JOBS[role] + (otherJobs ? ' · ' + otherJobs + ' px left for the other jobs' : '');
         if (approved) {
